@@ -1,0 +1,16 @@
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+data/
+exports/
+inbox/
+tmp/
+logs/
+.webui_secret_key
+openwebui-data/
+dist/
+build/
