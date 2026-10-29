@@ -1,0 +1,45 @@
+/* Match the approved desktop concept; smaller viewports retain a compact rail. */
+.header-actions {display:flex; align-items:center; gap:14px; flex-shrink:0}
+.header-actions>button {padding:10px 16px}
+.overview-grid>div,.related,.metadata dd {min-width:0}
+.metadata dd {overflow-wrap:anywhere}
+.field textarea {width:100%; resize:vertical; min-height:90px}
+@media (min-width:1181px) {
+  .sidebar {width:clamp(224px,17.5vw,278px)}
+  main {margin-left:clamp(224px,17.5vw,278px); padding:0 34px}
+  .utility-bar {height:52px; font-size:13px}
+  .brand {font-size:22px; gap:13px; margin:0 15px 28px}
+  .nav-item {font-size:16px; padding:17px 20px}
+  .sidebar-bottom {font-size:14px; padding:20px 17px 8px}
+  .page-header h1 {font-size:32px}
+  .page-header p {font-size:16px}
+  .page-header {margin-bottom:29px}
+  .search-input {width:40%; max-width:485px; font-size:15px}
+  .toolbar>select {font-size:15px; min-width:200px}
+  .toolbar {margin-bottom:24px}
+  .toolbar-note {font-size:13px}
+  table {font-size:15px}
+  th {font-size:14px; padding:16px 19px}
+  td {padding:18px 19px}
+  .path-cell,.model-cell {font-size:14px}
+  .row-actions .text-button {font-size:14px}
+  .status {font-size:14px}
+  h2 {font-size:22px}
+  .detail-panel {padding:22px 25px 26px}
+  .tabs button {font-size:15px}
+  .metadata {font-size:15px; grid-template-columns:155px minmax(0,1fr)}
+  .related h3 {font-size:16px}
+  .related th,.related td {padding:13px 14px; font-size:13px}
+  .detail-actions button {font-size:13px}
+}
+@media (max-width:700px) {
+  .header-actions {gap:7px}
+  .header-actions>button {font-size:11px; padding:8px}
+  .header-actions>button svg {width:15px}
+  .page-header {flex-wrap:wrap}
+  .detail-header {flex-wrap:wrap}
+  .detail-header>.row-actions {margin-left:auto}
+  .title-with-status h2 {white-space:nowrap}
+  .overview-grid {grid-template-columns:minmax(0,1fr)}
+  .metadata {grid-template-columns:100px minmax(0,1fr)}
+}

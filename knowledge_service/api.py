@@ -30,7 +30,7 @@ class AskRequest(BaseModel):
 
 
 class Action(BaseModel):
-    action: Literal["ingest", "add_root", "scan", "retry", "pause", "resume", "classify", "delete",
+    action: Literal["ingest", "add_root", "update_root", "scan", "retry", "pause", "resume", "classify", "delete",
         "export", "import", "reindex", "benchmark"]
     args: dict = Field(default_factory=dict)
 
@@ -215,6 +215,9 @@ def admin_app(service):
                 return service.enqueue("ingest", {"path": str(path), "signature": [stat.st_size, stat.st_mtime_ns]})
             if body.action == "add_root":
                 return service.add_root(args["path"])
+            if body.action == "update_root":
+                with service.write_lock:
+                    return service.update_root(args["id"], args.get("enabled"), args.get("remove", False))
             if body.action == "scan":
                 return service.scan(args.get("verify", False))
             if body.action == "retry":

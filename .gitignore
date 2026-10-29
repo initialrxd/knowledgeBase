@@ -14,3 +14,7 @@ logs/
 openwebui-data/
 dist/
 build/
+manager-data/
+knowledge-bases/
+node_modules/
+*.tsbuildinfo

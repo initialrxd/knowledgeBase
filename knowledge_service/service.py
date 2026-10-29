@@ -64,6 +64,7 @@ class KnowledgeService:
         self.vectors = Vectors(settings.root / "vectors")
         self.extractor = PDFExtractor(settings.ocr_mode, layout=settings.pdf_layout, image_regions=settings.ocr_image_regions)
         self.write_lock = threading.RLock()
+        self.scan_lock = threading.RLock()
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.threads = []
@@ -492,7 +493,42 @@ class KnowledgeService:
         counts = {name: self.db.one(f"SELECT COUNT(*) n FROM {name}")["n"]
                   for name in ("documents", "versions", "chunks", "sources", "jobs")}
         counts["live_documents"] = self.db.one("SELECT COUNT(*) n FROM documents WHERE deleted=0")["n"]
-        return {"counts": counts, "active_profile": self.db.get_meta("active_profile"),
+        jobs_summary = {r["status"]: r["n"] for r in self.db.rows(
+            "SELECT status,COUNT(*) n FROM jobs GROUP BY status")}
+        index_jobs_summary = {r["status"]: r["n"] for r in self.db.rows(
+            "SELECT status,COUNT(*) n FROM jobs WHERE kind IN ('ingest','reindex','import') GROUP BY status")}
+        coverage = self.db.one("SELECT COUNT(*) n FROM documents d JOIN indexed_versions i "
+            "ON i.version_id=d.current_version AND i.profile=? WHERE d.deleted=0", (self.s.profile,))["n"]
+        active = self.db.get_meta("active_profile")
+        table = self.vectors.table(active) if active else None
+        unresolved = 0
+        for job in self.db.rows("SELECT payload,kind,updated FROM jobs WHERE status='failed'"):
+            if job["kind"] == "reindex":
+                unresolved += int(active != self.s.profile or coverage != counts["live_documents"])
+                continue
+            if job["kind"] == "import":
+                unresolved += int(not self.db.one("SELECT 1 FROM jobs WHERE kind='import' AND status='done' AND updated>?",
+                                                  (job["updated"],)))
+                continue
+            if job["kind"] != "ingest":
+                continue
+            payload = json.loads(job["payload"])
+            root_id = payload.get("root_id")
+            if root_id and root_id != "single" and not self.db.one("SELECT 1 FROM roots WHERE id=? AND enabled=1", (root_id,)):
+                continue
+            document = self.db.one("SELECT d.updated FROM sources s JOIN documents d ON s.document_id=d.id WHERE s.path=?",
+                                   (payload.get("path", ""),))
+            if not document or document["updated"] <= job["updated"]:
+                unresolved += 1
+        jobs_summary["unresolved_failures"] = unresolved
+        index_jobs_summary["unresolved_failures"] = unresolved
+        return {"counts": counts, "data_dir": str(self.s.root), "active_profile": active,
+            "jobs_summary": jobs_summary, "indexed_documents": coverage,
+            "index_jobs_summary": index_jobs_summary,
+            "has_vector_index": table is not None and table.count_rows() > 0,
+            "last_scan": self.db.get_meta("last_scan"),
+            "last_successful_scan": self.db.get_meta("last_successful_scan"),
+            "scan_pending": self.db.get_meta("scan_pending", False),
             "configured_profile": self.s.profile, "paused": self.db.get_meta("paused", False),
             "demo_mode": self.s.demo_mode, "chat_model": self.s.chat_model,
             "classification_model": self.s.classify_model or self.s.chat_model,
@@ -502,15 +538,52 @@ class KnowledgeService:
             "jobs": self.db.rows("SELECT id,kind,status,attempts,error,result,updated FROM jobs ORDER BY updated DESC LIMIT 50")}
 
     def add_root(self, path):
+        with self.scan_lock:
+            return self._add_root(path)
+
+    def _add_root(self, path):
         path = Path(path).resolve()
         if not path.is_dir() or path.is_relative_to(self.s.root):
             raise ValueError("Source root must be an existing directory outside the managed data directory")
+        for row in self.db.rows("SELECT path FROM roots"):
+            other = Path(row["path"]).resolve()
+            if path != other and (path.is_relative_to(other) or other.is_relative_to(path)):
+                raise ValueError("Source directories must not overlap")
         identifier = sha256_text(str(path))[:24]
         self.db.execute("INSERT OR REPLACE INTO roots VALUES(?,?,1)", (identifier, str(path)))
+        self.db.set_meta("scan_pending", True)
         if self.observer:
             self._watch(path, True)
         self.wake.set()
         return {"id": identifier, "path": str(path)}
+
+    def update_root(self, identifier, enabled=None, remove=False):
+        with self.scan_lock:
+            return self._update_root(identifier, enabled, remove)
+
+    def _update_root(self, identifier, enabled=None, remove=False):
+        root = self.db.one("SELECT * FROM roots WHERE id=?", (identifier,))
+        if not root:
+            raise KeyError("Source root not found")
+        self.db.set_meta("scan_pending", True)
+        if remove:
+            self.db.execute("DELETE FROM roots WHERE id=?", (identifier,))
+        else:
+            self.db.execute("UPDATE roots SET enabled=? WHERE id=?", (int(bool(enabled)), identifier))
+        # An already queued import from a detached source must not keep importing files.
+        for job in self.db.rows("SELECT id,payload FROM jobs WHERE kind='ingest' AND status='queued'"):
+            if json.loads(job["payload"]).get("root_id") == identifier:
+                self.db.execute("UPDATE jobs SET status='cancelled',updated=? WHERE id=?", (time.time(), job["id"]))
+        if self.observer:
+            # Changes only wake the scanner; rebuilding watches also releases removed paths.
+            self.observer.unschedule_all()
+            self._observed_roots.clear()
+            for row in self.db.rows("SELECT path FROM roots WHERE enabled=1"):
+                self._watch(row["path"], True)
+            for row in self.db.rows("SELECT path FROM sources WHERE root_id='single'"):
+                self._watch(Path(row["path"]).parent, False)
+        self.wake.set()
+        return {"updated": identifier}
 
     def enqueue(self, kind, payload):
         payload = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -518,14 +591,24 @@ class KnowledgeService:
         self.db.execute("INSERT OR IGNORE INTO jobs(id,kind,payload,created,updated) VALUES(?,?,?,?,?)",
             (identifier, kind, payload, now, now))
         row = self.db.one("SELECT id,status FROM jobs WHERE kind=? AND payload=?", (kind, payload))
+        if row["status"] == "cancelled":
+            self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE id=?", (time.time(), row["id"]))
+            row["status"] = "queued"
         self.wake.set()
         return row
 
     def scan(self, verify=False):
+        with self.scan_lock:
+            return self._scan(verify)
+
+    def _scan(self, verify=False):
         enqueued = 0
+        errors = []
+        self.db.set_meta("scan_pending", True)
         for root in self.db.rows("SELECT * FROM roots WHERE enabled=1"):
             directory = Path(root["path"])
             if not directory.is_dir():
+                errors.append("Source directory unavailable: " + str(directory))
                 continue  # An offline disk is not a deletion event.
             seen = set()
             try:
@@ -555,6 +638,7 @@ class KnowledgeService:
                     if source["path"] not in seen:
                         self.db.execute("UPDATE sources SET missing=1 WHERE path=?", (source["path"],))
             except OSError:
+                errors.append("Source scan incomplete: " + str(directory))
                 log.warning("Source scan incomplete; missing-file reconciliation skipped")
         for source in self.db.rows("SELECT * FROM sources WHERE root_id='single'"):
             path = Path(source["path"])
@@ -573,6 +657,11 @@ class KnowledgeService:
                     enqueued += int(result["status"] == "queued")
             except OSError:
                 log.warning("Single-file source temporarily unavailable")
+        result = {"at": time.time(), "enqueued": enqueued, "errors": errors}
+        self.db.set_meta("last_scan", result)
+        if not errors:
+            self.db.set_meta("last_successful_scan", result)
+        self.db.set_meta("scan_pending", False)
         return {"enqueued": enqueued}
 
     def _watch(self, path, recursive):
@@ -590,6 +679,8 @@ class KnowledgeService:
             def on_any_event(self, event):
                 if not event.is_directory and (event.src_path.lower().endswith(".pdf") or
                         getattr(event, "dest_path", "").lower().endswith(".pdf")):
+                    if not service.wake.is_set():
+                        service.db.set_meta("scan_pending", True)
                     service.wake.set()
 
         self.observer = Observer()

@@ -1,7 +1,18 @@
 $ErrorActionPreference = 'Stop'
 $kbProject = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $kbProject
-& (Join-Path $kbProject '.venv\Scripts\python.exe') -m knowledge_service.cli stop
+$kbManagerRunning = $false
+try {
+    $kbManagerHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8767/health' -TimeoutSec 2
+    $kbManagerRunning = $kbManagerHealth.service -eq 'knowledge-manager'
+} catch { }
+if ($kbManagerRunning) {
+    $kbSecrets = Get-Content -LiteralPath (Join-Path $kbProject 'manager-data\secrets.json') -Raw | ConvertFrom-Json
+    Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8767/manager/api/shutdown' -Headers @{Authorization = "Bearer $($kbSecrets.manager_admin)"} | Out-Null
+    Write-Output 'Manager is saving checkpoints and shutting down all managed services.'
+} else {
+    & (Join-Path $kbProject '.venv\Scripts\python.exe') -m knowledge_service.cli stop
+}
 # Open WebUI is a separate subprocess. Validate its command line before stopping it.
 $kbPidFile = Join-Path $kbProject 'logs\openwebui-child.pid'
 if (Test-Path -LiteralPath $kbPidFile) {
