@@ -5,6 +5,9 @@
 ## 启动和首次登录
 
 在项目目录运行 `scripts\Start-All.ps1`，浏览器访问 http://127.0.0.1:8080。
+macOS Apple Silicon 使用 `python3.11 scripts/manage.py start-all`；当前版本的 Open WebUI
+固定依赖没有 Intel macOS 原生安装包，Intel 用户可独立使用管理台及 HTTP / MCP。
+平台范围和验收状态见 [兼容性说明](COMPATIBILITY.md)。
 第一次使用时创建你自己的管理员账户。用户名、密码由你选择，项目不预置弱密码。
 
 启动脚本自动从被 Git 忽略的 `.env` 读取云模型设置，并预置本地知识库工具连接。

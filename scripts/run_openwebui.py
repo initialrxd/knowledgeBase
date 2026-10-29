@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from platform_paths import venv_executable
+
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 from knowledge_service.config import Settings  # noqa: E402
@@ -56,13 +58,18 @@ def environment(settings):
 def main():
     settings = Settings()
     settings.prepare()
-    executable = PROJECT / ".venv-webui" / "Scripts" / "open-webui.exe"
+    executable = venv_executable(PROJECT / ".venv-webui", "open-webui")
     if not executable.exists():
-        raise SystemExit("Open WebUI is not installed; run scripts/Install.ps1 -WithOpenWebUI")
-    child = subprocess.Popen([str(executable), "serve", "--host", "127.0.0.1", "--port", "8080"],
-        cwd=PROJECT, env=environment(settings))
+        raise SystemExit("Open WebUI is not installed; run scripts/manage.py install --with-openwebui")
     pid = PROJECT / "logs" / "openwebui-child.pid"
     pid.parent.mkdir(exist_ok=True)
+    if sys.platform != "win32":
+        # Replace the wrapper so SIGTERM reaches the actual server on macOS.
+        pid.write_text(str(os.getpid()), encoding="utf-8")
+        os.execve(str(executable), [str(executable), "serve", "--host", "127.0.0.1", "--port", "8080"],
+                  environment(settings))
+    child = subprocess.Popen([str(executable), "serve", "--host", "127.0.0.1", "--port", "8080"],
+        cwd=PROJECT, env=environment(settings))
     pid.write_text(str(child.pid), encoding="utf-8")
     try:
         raise SystemExit(child.wait())

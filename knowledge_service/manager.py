@@ -34,7 +34,7 @@ def main():
             # Bootstrap is local-only and consumed once. Never log permanent credentials.
             manager.registry.secret("bootstrap", manager.login_token)
             manager.registry.secret("manager_admin", manager.base.admin_token.get_secret_value())
-            print(f"知识库管理台 http://127.0.0.1:{args.port}；使用 scripts/Start-Manager.ps1 打开登录链接", flush=True)
+            print(f"知识库管理台 http://127.0.0.1:{args.port}；使用 scripts/manage.py start-manager --background 打开登录链接", flush=True)
             asyncio.run(run(manager, app))
     except portalocker.exceptions.LockException:
         raise SystemExit("管理台已在运行，请使用现有实例") from None

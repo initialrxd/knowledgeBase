@@ -1,6 +1,6 @@
 # knowledgeBase · 本地 PDF 知识库
 
-Windows / Python 原生部署的可迁移知识库。PDF 原件、分类副本、提取正文、切片和向量均可带走。
+面向 Windows / macOS 的 Python 原生部署知识库。PDF 原件、分类副本、提取正文、切片和向量均可带走。
 聊天、分类及 embedding 使用你自己的云 API；不需要部署本地 LLM 或 embedding 模型。
 
 ## 主要功能
@@ -14,17 +14,19 @@ Windows / Python 原生部署的可迁移知识库。PDF 原件、分类副本�
 
 ## 环境要求
 
-- Windows + PowerShell；安装脚本使用 Python 3.11 和 `py` 启动器。
+- Windows x64 + PowerShell，或 macOS（Apple Silicon / Intel）。
+- Python 3.11 / 3.12，推荐 3.11；Windows PowerShell 安装脚本使用 `py -3.11`。
 - Git，用于克隆仓库；不需要 Docker 或 WSL。
 - 可访问的 OpenAI 兼容聊天与 embedding API，分别配置地址、模型和密钥。
 - 首次安装需要联网下载 Python 依赖和 tokenizer 词表；OCR 按需加载本机识别模型。
 
 知识库服务与 Open WebUI 使用独立虚拟环境，避免依赖版本冲突。
-项目包声明支持 Python `>=3.11,<3.13`，仓库的 Windows 安装流程使用 Python 3.11。
+项目包声明支持 Python `>=3.11,<3.13`。当前 Windows 已本机回归；macOS 入口与两种架构依赖已适配，
+真实 macOS 验收待 CI 执行，不能视为已经通过。详见 [平台兼容性与验证范围](docs/COMPATIBILITY.md)。
 
 ## 快速启动
 
-在 PowerShell 中克隆并安装：
+Windows：在 PowerShell 中克隆并安装：
 
 ```powershell
 git clone https://github.com/initialrxd/knowledgeBase.git
@@ -32,7 +34,24 @@ Set-Location knowledgeBase
 .\scripts\Install.ps1 -WithOpenWebUI
 ```
 
-安装脚本创建 `.venv` 和 `.venv-webui`、安装锁定依赖，并在 `.env` 不存在时根据
+macOS：在终端中克隆并安装（先安装原生架构的 Python 3.11）：
+
+```bash
+git clone https://github.com/initialrxd/knowledgeBase.git
+cd knowledgeBase
+python3.11 scripts/manage.py install --with-openwebui
+```
+
+上面的 Open WebUI 安装命令适用于 Apple Silicon。Intel Mac 使用
+`python3.11 scripts/manage.py install` 安装管理台及 HTTP / MCP 服务；当前 Open WebUI 版本
+固定的原生依赖未提供 Intel macOS 安装包，暂不支持在 Intel Mac 上原生安装此聊天界面。
+
+macOS 按本机平台解析依赖，不直接套用 Windows 的 `requirements*.lock.txt`。
+Intel Mac 对 LanceDB / ONNX Runtime 使用独立版本约束；Apple Silicon 请使用原生 arm64 Python。
+只需管理台和 HTTP / MCP 时省略 `--with-openwebui`；不需要 OCR 时添加 `--without-ocr`。
+该选项在全新环境中省略 OCR 依赖，不会卸载已有环境中的 OCR 包。
+
+安装脚本创建 `.venv` 和可选的 `.venv-webui`、安装对应平台依赖，并在 `.env` 不存在时根据
 [配置示例](.env.example) 创建配置，自动生成查询与管理令牌。已有 `.env` 不会被覆盖。
 
 编辑本机 `.env`，至少填写以下配置，再启动服务：
@@ -51,6 +70,20 @@ API 地址是端点根路径；供应商要求时需包含 `/v1`，不要填写�
 ```powershell
 .\scripts\Start-All.ps1
 ```
+
+macOS 配置好 `.env` 后启动（同时适用于 Windows，将 `python3.11` 替换为 `py -3.11`）：
+
+```bash
+python3.11 scripts/manage.py start-all
+# 只启动管理台：
+python3.11 scripts/manage.py start-manager --background
+# 保存检查点并请求停止：
+python3.11 scripts/manage.py stop-all
+```
+
+管理台启动后会打开一次性登录链接；无桌面环境时加 `--no-browser`。
+`start-all` 后台启动管理台及 Open WebUI；单独启动服务时加 `--background` 才会转入后台。
+`start-knowledge` 可单独启动原 HTTP / MCP 服务，不要同时启动管理台和独立知识库服务。
 
 - 知识库管理台：http://127.0.0.1:8767
 - 聊天界面：http://127.0.0.1:8080
@@ -190,7 +223,7 @@ knowledge_service/           Python 服务与命令行
   providers.py              云端聊天、分类和 embedding 调用
   db.py / vectors.py        SQLite 元数据与 LanceDB 向量存储
   portable.py / benchmark.py 导出导入与离线基准测试
-scripts/                    Windows 安装、启动、停止和诊断脚本
+scripts/                    跨平台管理入口、Windows 快捷脚本和诊断工具
 config/                     Open WebUI 模型预设
 tests/                      API、处理流水线与模型客户端测试
 docs/                       操作、Open WebUI 和远程接入说明

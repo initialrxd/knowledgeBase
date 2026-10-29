@@ -1,0 +1,42 @@
+name: Windows and macOS compatibility
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15, macos-15-intel]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install through the supported entry point
+        run: python scripts/manage.py install
+      - name: Test, lint, and import OCR native libraries
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then PY=.venv/Scripts/python.exe; else PY=.venv/bin/python; fi
+          "$PY" -m pytest -q
+          "$PY" -m ruff check knowledge_service tests scripts
+          "$PY" -c "import rapidocr, onnxruntime, cv2; print(onnxruntime.get_available_providers())"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build

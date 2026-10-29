@@ -76,8 +76,9 @@ def export_bundle(service, destination, include_vectors=True):
             if (project / name).is_file():
                 shutil.copyfile(project / name, application / name)
         (stage / "RESTORE.md").write_text(
-            "# Restore\n\nThe application/ folder contains the source and Windows installer. "
-            "Copy application/ to a writable folder, run scripts/Install.ps1, configure .env with your own credentials, "
+            "# Restore\n\nThe application/ folder contains the source and Windows/macOS installer. "
+            "Copy application/ to a writable folder, run Python 3.11/3.12 scripts/manage.py install, "
+            "configure .env with your own credentials, "
             "start the knowledge service, then run knowledge import <this bundle path> --wait. "
             "Open WebUI users and chat history are backed up separately.\n", encoding="utf-8")
         json_file(stage / "manifest.json", {"format": "portable-knowledge", "version": 1,
