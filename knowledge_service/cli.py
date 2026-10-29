@@ -58,7 +58,7 @@ def main():
     search = commands.add_parser("search", help="检索知识库")
     search.add_argument("query")
     search.add_argument("--category")
-    search.add_argument("--mode", choices=["hybrid", "keyword", "vector"], default="hybrid")
+    search.add_argument("--mode", choices=["hybrid", "keyword", "vector"])
     ask = commands.add_parser("ask", help="调用配置的聊天模型回答并引用来源")
     ask.add_argument("question")
     args = parser.parse_args()

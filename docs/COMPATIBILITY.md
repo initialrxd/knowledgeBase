@@ -62,8 +62,8 @@ macOS 目录访问受系统权限约束，需向终端/Python 授予实际来源
 
 ## 验证
 
-本轮 Windows 完整回归 49 项通过（182.35 秒）；补充 Intel Open WebUI 安装前检查后，
-13 项启动脚本专项测试全部通过，合计 50 项独立用例具有通过证据。
+本轮 Windows x64 / CPython 3.11.9 完整回归 **69 项通过**（319.19 秒）。
+包含平台路径及安装分支、真实后台进程、worker / MCP、多库配置独立保存与检索预览等用例。
 ruff 检查、核心 / Open WebUI 两个环境的 `pip check`、前端 TypeScript / Vite 构建通过。
 前端构建在沙箱内遇到 esbuild `spawn EPERM`，允许启动编译子进程后通过。
 原测试保留 Starlette TestClient 与 MCP 客户端接口弃用警告。
@@ -72,9 +72,32 @@ ruff 检查、核心 / Open WebUI 两个环境的 `pip check`、前端 TypeScrip
 原回归包含真实 worker / MCP 子进程、PDF 处理、检索、导出恢复及多库管理。
 OCR 测试使用替身验证触发条件，不代表已完成 Mac 上真实扫描页识别验收。
 
+本次 UI 检查使用 Windows 上的 Chrome / Playwright，桌面 1440×1100、手机视口 390×844。
+验证「向量化配置」「检索配置」标题、默认连续 5 次检索、可选 2–10 次、相同草稿参数连续请求、
+算术平均值与各次耗时对应、未保存预览不改变系统默认值、错误次数拦截、失败不显示平均值及恢复后重试。
+预期内注入一次 HTTP 503 以检查错误处理，未发现非预期控制台错误；测试数据及截图均放在仓库外。
+这项 UI 检查使用隔离 demo 数据，不代表真实云端接口的延迟测试。
+
+Apple Silicon 依赖发行包已按 PyPI 官方文件列表重新核对：
+
+| 依赖 | 核对版本 | macOS 原生包 |
+|---|---|---|
+| [LanceDB](https://pypi.org/project/lancedb/0.40.0/#files) | 0.40.0 | macOS 11+ arm64，CPython 3.10 abi3 |
+| [PyMuPDF](https://pypi.org/project/pymupdf/1.28.2/#files) | 1.28.2 | macOS 11+ arm64，CPython 3.10 abi3 |
+| [PyArrow](https://pypi.org/project/pyarrow/23.0.1/#files) | 23.0.1 | macOS 12+ arm64，CPython 3.11 / 3.12 |
+| [NumPy](https://pypi.org/project/numpy/1.26.4/#files) | 1.26.4 | macOS 11+ arm64，CPython 3.11 / 3.12 |
+| [ONNX Runtime（核心 OCR）](https://pypi.org/project/onnxruntime/1.31.0/#files) | 1.31.0 | macOS 14+ arm64，CPython 3.11 / 3.12 |
+| [ONNX Runtime（Open WebUI）](https://pypi.org/project/onnxruntime/1.26.0/#files) | 1.26.0 | macOS 14+ arm64，CPython 3.11 / 3.12 |
+
+这只确认上述版本有目标架构发行包，不等同于完整依赖解析、Safari 验证或 Mac 运行验收。
+macOS 使用本机解析并可能选择范围内其他版本，安装时需保持原生 arm64 Python 和 macOS 14+。
+前端本次改动使用浏览器计时与标准 HTTP 请求，未新增 Windows 或 macOS 专属原生依赖。
+
 `.github/workflows/compatibility.yml` 为 Windows x64、macOS Apple Silicon、macOS Intel
 分别配置 Python 3.11 / 3.12：通过统一入口安装，运行 pytest、ruff、原生 OCR 库导入及前端构建。
 Mac runner 选择依据 [GitHub 官方 runner 文档](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
+工作流新增显式 Python 架构选择和架构断言：macos-15 必须为 arm64，Windows / Intel 为 x64，
+避免在 Apple Silicon 验证中意外使用 Intel/Rosetta 解释器；工作流 YAML 与断言语法已在本机检查。
 本轮未提交或推送代码，未触发远程 CI；Open WebUI 的 macOS 原生安装和浏览器会话仍需独立验收。
 
 本机验证命令：

@@ -97,6 +97,7 @@ class Registry:
         profile = self.get("embedding", kb["embedding_id"])
         for field in ("base_url", "endpoint", "model", "dimensions", "revision", "batch_size"):
             values["embedding_" + field] = profile[field]
+        values.update(kb.get("tuning", {}))
         values.update(embedding_api_key=self.secret(profile["id"]), data_dir=kb["data_dir"],
                       port=kb["admin_port"], tools_port=kb["tools_port"], host="127.0.0.1", public_base_url="")
         return Settings(_env_file=None, **values)
@@ -115,6 +116,7 @@ class Registry:
         fields = {"KB_EMBEDDING_" + name.upper(): profile[name]
                   for name in ("base_url", "endpoint", "model", "dimensions", "revision", "batch_size")}
         fields["KB_EMBEDDING_API_KEY"] = self.secret(profile["id"])
+        fields.update({"KB_" + name.upper(): value for name, value in kb.get("tuning", {}).items()})
         updated = text
         for key, value in fields.items():
             line = key + "=" + json.dumps(str(value), ensure_ascii=False)

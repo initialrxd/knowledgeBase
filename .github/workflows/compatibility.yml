@@ -21,6 +21,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.os == 'macos-15' && 'arm64' || 'x64' }}
+      - name: Verify native Python architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.os == 'macos-15' && 'arm64' || 'x64' }}
+        run: >-
+          python -c "import os, platform;
+          actual = platform.machine().lower(); expected = os.environ['EXPECTED_ARCH'];
+          print('Native architecture:', platform.system(), actual);
+          assert actual in ({'arm64', 'aarch64'} if expected == 'arm64' else {'amd64', 'x86_64'}), (actual, expected)"
       - name: Install through the supported entry point
         run: python scripts/manage.py install
       - name: Test, lint, and import OCR native libraries

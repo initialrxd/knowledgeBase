@@ -16,7 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 
-from .api import _errors
+from .api import SearchRequest, _errors
+from .config import IngestionTuning, LibraryTuning, RetrievalTuning
 from .manager_gateway import start_mcp, stop_mcp, test_mcp
 
 
@@ -232,6 +233,26 @@ def management_app(manager, auto_start=True):
     def kb_action(identifier: str, body: WorkerAction):
         manager.registry.get("kb", identifier)
         return manager.submit(manager.kb_action, identifier, body.action, body.args)
+
+    @app.put("/manager/api/knowledge-bases/{identifier}/tuning")
+    def update_tuning(identifier: str, body: LibraryTuning):
+        manager.registry.get("kb", identifier)
+        return manager.submit(manager.save_tuning, identifier, body.model_dump())
+
+    @app.put("/manager/api/knowledge-bases/{identifier}/tuning/ingestion")
+    def update_ingestion(identifier: str, body: IngestionTuning):
+        manager.registry.get("kb", identifier)
+        return manager.submit(manager.save_tuning, identifier, body.model_dump(), "ingestion")
+
+    @app.put("/manager/api/knowledge-bases/{identifier}/tuning/retrieval")
+    def update_retrieval(identifier: str, body: RetrievalTuning):
+        manager.registry.get("kb", identifier)
+        return manager.submit(manager.save_tuning, identifier, body.model_dump(), "retrieval")
+
+    @app.post("/manager/api/knowledge-bases/{identifier}/search")
+    def test_search(identifier: str, body: SearchRequest):
+        manager.registry.get("kb", identifier)
+        return manager.request(identifier, "POST", "/v1/search", tools=True, json=body.model_dump(), timeout=150)
 
     @app.post("/manager/api/knowledge-bases/{identifier}/roots")
     def roots(identifier: str, body: RootInput):

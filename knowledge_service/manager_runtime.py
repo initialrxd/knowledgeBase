@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 import httpx
 import portalocker
 
-from .config import Settings
+from .config import IngestionTuning, LibraryTuning, RetrievalTuning, Settings
 from .manager_store import Registry, settings_values
 from .providers import ProviderError, Providers
 
@@ -272,6 +272,24 @@ class Manager:
             self.registry.sync_default_environment(self.project)
         return kb
 
+    def save_tuning(self, identifier, value, scope=None):
+        models = {None: LibraryTuning, "ingestion": IngestionTuning, "retrieval": RetrievalTuning}
+        if scope not in models:
+            raise ValueError("Unknown settings scope")
+        patch = models[scope].model_validate(value).model_dump()
+        with self._lock:
+            kb = self.registry.get("kb", identifier)
+            previous = LibraryTuning.from_settings(self.registry.worker_settings(kb)).model_dump()
+            tuning = LibraryTuning.model_validate({**previous, **patch}).model_dump()
+            kb["tuning"] = tuning
+            self.registry.put("kb", kb)
+            restart = tuning != previous and self.worker_states.get(identifier) == "running"
+        if restart:
+            self.restart_worker(identifier)
+        if identifier == "default":
+            self.registry.sync_default_environment(self.project)
+        return {"tuning": tuning, "restarted": restart}
+
     def _validate_source_dirs(self, source_dirs, storage):
         sources = []
         reserved = [Path(k["data_dir"]) for k in self.registry.list("kb")] + [self.registry.directory, storage]
@@ -367,7 +385,8 @@ class Manager:
 
     def snapshot(self, kb):
         lifecycle = self.worker_states.get(kb["id"], "stopped")
-        base = {**kb, "vector_dir": str(Path(kb["data_dir"]) / "vectors"),
+        tuning = LibraryTuning.from_settings(self.registry.worker_settings(kb)).model_dump()
+        base = {**kb, "tuning": tuning, "vector_dir": str(Path(kb["data_dir"]) / "vectors"),
                 "runtime": lifecycle, "index_status": "unknown", "availability": "not_ready",
                 "reason": "知识库未运行", "state": None}
         if lifecycle in ("starting", "stopping"):

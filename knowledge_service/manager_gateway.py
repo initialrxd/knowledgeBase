@@ -29,9 +29,13 @@ class Gateway:
             raise ValueError("多库 MCP 读取文档/片段时必须提供 knowledge_base_id")
         return allowed
 
-    def search(self, query, limit=10, category=None, document_id=None, mode="hybrid", knowledge_base_id=None):
+    def search(self, query, limit=None, category=None, document_id=None, mode=None, knowledge_base_id=None):
         body = SearchRequest(query=query, limit=limit, category=category, document_id=document_id, mode=mode)
         selected = self.selected(knowledge_base_id, single=bool(document_id))
+        # Each worker applies its own defaults; the merged cap uses the largest library limit.
+        merged_limit = limit if limit is not None else max(
+            self.manager.registry.worker_settings(self.manager.registry.get("kb", identifier)).search_limit
+            for identifier in selected)
 
         def fetch(identifier):
             try:
@@ -55,7 +59,7 @@ class Gateway:
         if not successful:
             raise ProviderError("所有关联知识库均不可用")
         results.sort(key=lambda r: (-r["score"], r["knowledge_base_id"], r["id"]))
-        return {"query": query, "results": results[:limit], "warnings": warnings,
+        return {"query": query, "results": results[:merged_limit], "warnings": warnings,
                 "demo_mode": self.manager.base.demo_mode}
 
     def read(self, path, knowledge_base_id=None, **params):
@@ -86,8 +90,8 @@ def gateway_app(manager, instance):
             allowed_hosts=["127.0.0.1:*", "localhost:*", "testserver"]))
 
     @mcp.tool()
-    def search_knowledge(query: str, limit: int = 10, category: str | None = None,
-                         document_id: str | None = None, mode: str = "hybrid",
+    def search_knowledge(query: str, limit: int | None = None, category: str | None = None,
+                         document_id: str | None = None, mode: str | None = None,
                          knowledge_base_id: str | None = None) -> dict:
         """Search the allowed knowledge bases; results include source library IDs and citations."""
         return gateway.search(query, limit, category, document_id, mode, knowledge_base_id)

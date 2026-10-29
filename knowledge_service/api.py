@@ -18,10 +18,12 @@ from .providers import ProviderError
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000, description="Natural-language question or search terms")
-    limit: int = Field(default=10, ge=1, le=50)
-    category: str | None = Field(default=None, max_length=1000, description="Optional category path; includes descendants")
-    document_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
-    mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
+    limit: int | None = Field(default=None, ge=1, le=50, description="Omit to use the library's configured limit")
+    category: str | None = Field(default=None, max_length=1000,
+        description="Category path including descendants; omit for library default, empty string clears filter")
+    document_id: str | None = Field(default=None, pattern=r"^(?:[a-f0-9]{32})?$",
+        description="Omit for library default; empty string clears the default filter")
+    mode: Literal["hybrid", "keyword", "vector"] | None = None
 
 
 class AskRequest(BaseModel):
@@ -96,8 +98,8 @@ def tools_app(service):
             allowed_hosts=allowed_hosts))
 
     @mcp.tool()
-    def search_knowledge(query: str, limit: int = 10, category: str | None = None,
-                         document_id: str | None = None, mode: str = "hybrid") -> dict:
+    def search_knowledge(query: str, limit: int | None = None, category: str | None = None,
+                         document_id: str | None = None, mode: str | None = None) -> dict:
         """Search the PDF corpus. Returns evidence with document IDs, chunk IDs and PDF page numbers."""
         body = SearchRequest(query=query, limit=limit, category=category, document_id=document_id, mode=mode)
         return service.search(**body.model_dump())
@@ -277,9 +279,11 @@ def run_stdio(settings):
         return response.json()
 
     @mcp.tool()
-    def search_knowledge(query: str, limit: int = 10, category: str | None = None) -> dict:
+    def search_knowledge(query: str, limit: int | None = None, category: str | None = None,
+                         document_id: str | None = None, mode: str | None = None) -> dict:
         """Search PDFs and retrieve cited evidence."""
-        return request("POST", "/v1/search", json={"query": query, "limit": limit, "category": category})
+        return request("POST", "/v1/search", json={"query": query, "limit": limit, "category": category,
+            "document_id": document_id, "mode": mode})
 
     @mcp.tool()
     def get_chunk(chunk_id: str) -> dict:

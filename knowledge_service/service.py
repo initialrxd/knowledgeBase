@@ -364,9 +364,15 @@ class KnowledgeService:
             (" AND " + " AND ".join(where) if where else ""), [*ids, *args])
         return {r["id"]: r for r in rows}
 
-    def search(self, query: str, limit=10, category=None, document_id=None, mode="hybrid"):
+    def search(self, query: str, limit=None, category=None, document_id=None, mode=None):
+        limit = self.s.search_limit if limit is None else limit
+        mode = self.s.search_mode if mode is None else mode
+        category = self.s.search_category if category is None else category
+        document_id = self.s.search_document_id if document_id is None else document_id
         if not query.strip() or len(query) > 8000 or limit < 1 or limit > 50:
             raise ValueError("Query must contain 1-8000 characters and limit must be 1-50")
+        if mode not in ("hybrid", "keyword", "vector"):
+            raise ValueError("Unknown search mode")
         warnings, ranks = [], {}
         fts = fts_query(query)
         candidate_limit = max(100, limit * 20)
@@ -464,7 +470,7 @@ class KnowledgeService:
         return doc
 
     def ask(self, question, category=None):
-        found = self.search(question, limit=10, category=category)
+        found = self.search(question, category=category)
         if not found["results"]:
             return {"answer": "知识库中没有找到足够的相关资料。", "citations": [], "warnings": found["warnings"]}
         enc, evidence, used = encoding(self.s.tokenizer), [], []

@@ -7,7 +7,7 @@ import secrets
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     public_base_url: str = ""
     api_timeout: float = 120
     max_context_tokens: int = 12000
+    search_limit: int = Field(default=10, ge=1, le=50)
+    search_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
+    search_category: str = Field(default="", max_length=1000)
+    search_document_id: str = Field(default="", pattern=r"^(?:[a-f0-9]{32})?$")
     tokenizer: str = "cl100k_base"
     unclassified_names: list[str] = ["inbox", "unclassified", "未分类", "待分类"]
 
@@ -88,6 +92,42 @@ class Settings(BaseSettings):
         for name in ("originals", "library", "extracted", "vectors", "staging", "exports", "cache"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(self.root / "cache" / "tiktoken"))
+
+
+class IngestionTuning(BaseModel):
+    """Ingestion settings saved without changing retrieval defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+    chunk_tokens: int = Field(default=800, ge=64, le=8000)
+    chunk_overlap: int = Field(default=100, ge=0)
+    ocr_mode: Literal["auto", "off", "force"] = "auto"
+    pdf_layout: Literal["native", "structured"] = "native"
+    ocr_image_regions: bool = False
+    api_concurrency: int = Field(default=2, ge=1, le=16)
+
+    @model_validator(mode="after")
+    def validate_overlap(self):
+        if self.chunk_overlap >= self.chunk_tokens:
+            raise ValueError("重叠长度必须小于切片长度")
+        return self
+
+
+class RetrievalTuning(BaseModel):
+    """Retrieval defaults; preview requests can override these without saving."""
+
+    model_config = ConfigDict(extra="forbid")
+    search_limit: int = Field(default=10, ge=1, le=50)
+    search_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
+    search_category: str = Field(default="", max_length=1000)
+    search_document_id: str = Field(default="", pattern=r"^(?:[a-f0-9]{32})?$")
+
+
+class LibraryTuning(IngestionTuning, RetrievalTuning):
+    """Public, credential-free settings editable independently for each library."""
+
+    @classmethod
+    def from_settings(cls, settings: Settings):
+        return cls.model_validate(settings.model_dump(include=set(cls.model_fields)))
 
 
 def initialize(env_file: Path = Path(".env")) -> bool:
