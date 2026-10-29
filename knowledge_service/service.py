@@ -535,7 +535,22 @@ class KnowledgeService:
             "embedding_model": self.s.embedding_model,
             "roots": self.db.rows("SELECT * FROM roots"),
             "missing_sources": self.db.rows("SELECT path,document_id FROM sources WHERE missing=1"),
-            "jobs": self.db.rows("SELECT id,kind,status,attempts,error,result,updated FROM jobs ORDER BY updated DESC LIMIT 50")}
+            "jobs": self.job_history()}
+
+    def job_history(self):
+        jobs = self.db.rows("SELECT id,kind,status,attempts,error,result,updated,payload "
+                            "FROM jobs ORDER BY updated DESC LIMIT 50")
+        for job in jobs:
+            try:
+                payload = json.loads(job.pop("payload"))
+            except (ValueError, TypeError):
+                payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            path = next((payload[key] for key in ("path", "source", "destination")
+                         if isinstance(payload.get(key), str) and payload[key]), "")
+            job["source_path"] = path
+            job["filename"] = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] if path else None
+        return jobs
 
     def add_root(self, path):
         with self.scan_lock:
@@ -601,6 +616,43 @@ class KnowledgeService:
         with self.scan_lock:
             return self._scan(verify)
 
+    def _cancel_missing_ingest(self, identifier, running=False):
+        result = {"status": "cancelled", "reason": "source_missing"}
+        statuses = "('queued','failed','running')" if running else "('queued','failed')"
+        self.db.execute(f"UPDATE jobs SET status='cancelled',result=?,error=NULL,updated=? "
+                        f"WHERE id=? AND status IN {statuses}",
+                        (json.dumps(result), time.time(), identifier))
+        return result
+
+    def _reconcile_ingest_jobs(self, directory, seen):
+        # First imports have no sources row yet, so reconcile the queue as well.
+        for job in self.db.rows("SELECT id,payload FROM jobs WHERE kind='ingest' AND status IN ('queued','failed')"):
+            payload = json.loads(job["payload"])
+            path = Path(payload["path"])
+            if path.is_relative_to(directory) and str(path) not in seen and self._ingest_source_missing(payload):
+                self._cancel_missing_ingest(job["id"])
+
+    def _ingest_source_missing(self, payload):
+        path = Path(payload["path"])
+        root_id = payload.get("root_id")
+        if root_id and root_id != "single":
+            root = self.db.one("SELECT path FROM roots WHERE id=? AND enabled=1", (root_id,))
+            if not root or not path.is_relative_to(Path(root["path"])):
+                return False
+            directory = Path(root["path"])
+        else:
+            directory = path.parent
+        try:
+            # An unavailable source disk must not be treated as a file deletion.
+            if not directory.is_dir():
+                return False
+            path.stat()
+        except (FileNotFoundError, NotADirectoryError):
+            return True
+        except OSError:
+            pass
+        return False
+
     def _scan(self, verify=False):
         enqueued = 0
         errors = []
@@ -634,9 +686,12 @@ class KnowledgeService:
                         if result["status"] == "queued":
                             enqueued += 1
                 # Mark missing only after a successful complete scan of an available directory.
+                if not directory.is_dir():
+                    raise FileNotFoundError("Source directory became unavailable during scan")
                 for source in self.db.rows("SELECT path FROM sources WHERE root_id=?", (root["id"],)):
                     if source["path"] not in seen:
                         self.db.execute("UPDATE sources SET missing=1 WHERE path=?", (source["path"],))
+                self._reconcile_ingest_jobs(directory, seen)
             except OSError:
                 errors.append("Source scan incomplete: " + str(directory))
                 log.warning("Source scan incomplete; missing-file reconciliation skipped")
@@ -720,14 +775,20 @@ class KnowledgeService:
             self.run_job(job["id"])
 
     def run_job(self, identifier):
-        job = self.db.one("SELECT * FROM jobs WHERE id=?", (identifier,))
-        if not job:
-            raise KeyError("Job not found")
-        self.db.execute("UPDATE jobs SET status='running',attempts=attempts+1,updated=? WHERE id=?",
-            (time.time(), identifier))
+        with self.scan_lock:
+            job = self.db.one("SELECT * FROM jobs WHERE id=?", (identifier,))
+            if not job:
+                raise KeyError("Job not found")
+            if job["status"] != "queued":
+                return json.loads(job["result"]) if job["result"] else {"status": job["status"]}
+            payload = json.loads(job["payload"])
+            if job["kind"] == "ingest" and self._ingest_source_missing(payload):
+                self.db.execute("UPDATE sources SET missing=1 WHERE path=?", (payload["path"],))
+                return self._cancel_missing_ingest(identifier)
+            self.db.execute("UPDATE jobs SET status='running',attempts=attempts+1,updated=? WHERE id=?",
+                (time.time(), identifier))
         self._job_id = identifier
         try:
-            payload = json.loads(job["payload"])
             if job["kind"] == "ingest":
                 result = self.ingest(payload["path"], payload.get("root_id"))
             elif job["kind"] == "reindex":
@@ -749,6 +810,9 @@ class KnowledgeService:
             self.db.execute("UPDATE jobs SET status='queued',updated=? WHERE id=?", (time.time(), identifier))
             return {"interrupted": True}
         except Exception as error:
+            if job["kind"] == "ingest" and self._ingest_source_missing(payload):
+                self.db.execute("UPDATE sources SET missing=1 WHERE path=?", (payload["path"],))
+                return self._cancel_missing_ingest(identifier, running=True)
             # Only explicitly safe errors are returned. Raw library/provider exceptions may expose data.
             message = str(error) if isinstance(error, (ValueError, ProviderError, KeyError)) else type(error).__name__
             self.db.execute("UPDATE jobs SET status='failed',error=?,updated=? WHERE id=?",
@@ -764,11 +828,16 @@ class KnowledgeService:
                 (json.dumps(value, ensure_ascii=False), time.time(), self._job_id))
 
     def retry(self, job_id=None):
-        if job_id:
-            self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE id=? AND status='failed'",
-                (time.time(), job_id))
-        else:
-            self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE status='failed'", (time.time(),))
+        with self.scan_lock:
+            self.scan()
+            for job in self.db.rows("SELECT id,payload FROM jobs WHERE kind='ingest' AND status='failed'"):
+                if (not job_id or job["id"] == job_id) and self._ingest_source_missing(json.loads(job["payload"])):
+                    self._cancel_missing_ingest(job["id"])
+            if job_id:
+                self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE id=? AND status='failed'",
+                    (time.time(), job_id))
+            else:
+                self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE status='failed'", (time.time(),))
         self.wake.set()
         return {"retried": job_id or "all_failed"}
 

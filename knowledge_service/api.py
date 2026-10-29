@@ -223,6 +223,8 @@ def admin_app(service):
             if body.action == "retry":
                 return service.retry(args.get("job_id"))
             if body.action in ("pause", "resume"):
+                if body.action == "resume":
+                    service.scan()
                 service.db.set_meta("paused", body.action == "pause")
                 return {"paused": body.action == "pause"}
             if body.action == "classify":

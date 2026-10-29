@@ -68,3 +68,10 @@ Browser 插件未提供，采用 bundled Playwright 驱动本机无界面 Edge�
 - Playwright/Edge 在 1440×1000 和 390×844 验证通过，没有页面运行时错误或整体横向溢出。测试使用临时空目录，测试库及 MCP 已移除。
 - 已修复未分配内部端口时错误请求端口 0 的问题。
 - 新截图：`knowledge-create-locations.png`、`mcp-running-edit.png`、`knowledge-create-mobile.png`，位于上文相同截图根目录。
+
+## 任务文件名显示验收
+
+- 任务状态接口从原有 payload 提取文件名和来源路径，不修改历史记录、不重新导入文件；待处理、完成、失败及已删除来源文件均可显示名称。
+- 页面以文件名为主，任务类型和尝试次数为辅；移除可见任务 ID 及原始结果 JSON，详情转换为页数、切片进度及可读完成信息。
+- 14 项管理回归、Ruff 与生产构建通过。Playwright/Edge 检查真实历史文件名、隐藏任务/文档 ID、页面无运行时错误，以及手机整体不溢出，均通过。
+- 桌面截图：`job-history-filenames.png`，位于上文相同截图根目录。

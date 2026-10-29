@@ -4,6 +4,9 @@
 .overview-grid>div,.related,.metadata dd {min-width:0}
 .metadata dd {overflow-wrap:anywhere}
 .field textarea {width:100%; resize:vertical; min-height:90px}
+.job-filename {max-width:400px; overflow-wrap:anywhere}
+.job-filename strong {font-weight:500}
+.job-table {min-width:650px}
 @media (min-width:1181px) {
   .sidebar {width:clamp(224px,17.5vw,278px)}
   main {margin-left:clamp(224px,17.5vw,278px); padding:0 34px}

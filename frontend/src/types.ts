@@ -1,4 +1,4 @@
-export type Job = {id: string; kind: string; status: string; attempts: number; error?: string; result?: string; updated: number};
+export type Job = {id: string; kind: string; status: string; attempts: number; filename?: string | null; source_path?: string; error?: string; result?: string; updated: number};
 export type Root = {id: string; path: string; enabled: number};
 export type LibraryState = {counts: Record<string, number>; indexed_documents: number; active_profile?: string;
   configured_profile: string; paused: boolean; roots: Root[]; jobs: Job[]; jobs_summary: Record<string, number>;

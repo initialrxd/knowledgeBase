@@ -268,3 +268,41 @@ def test_source_validation_happens_before_creating_storage(manager, tmp_path):
     value.update(source_dirs=[str(source)], data_dir=str(source / "nested-output"))
     with pytest.raises(ValueError, match="不能重叠"):
         manager.save_kb(value)
+
+
+def test_job_history_resolves_filenames_without_source_files(service):
+    paths = [r"C:\资料\雷达 数据表.pdf", "/archive/产品规格.pdf", r"D:\missing\failed.pdf"]
+    ids = [service.enqueue("ingest", {"path": path})["id"] for path in paths]
+    service.db.execute("UPDATE jobs SET status='done',result=? WHERE id=?",
+                       (json.dumps({"document_id": "a" * 32, "pages": 3, "chunks": 8}), ids[1]))
+    service.db.execute("UPDATE jobs SET status='failed',error='API unavailable' WHERE id=?", (ids[2],))
+    jobs = {job["id"]: job for job in service.status()["jobs"]}
+    assert jobs[ids[0]]["filename"] == "雷达 数据表.pdf"
+    assert jobs[ids[1]]["filename"] == "产品规格.pdf"
+    assert jobs[ids[2]]["filename"] == "failed.pdf"
+    assert jobs[ids[2]]["error"] == "API unavailable"
+    assert all("payload" not in job for job in jobs.values())
+    assert jobs[ids[0]]["source_path"] == paths[0]
+    library_job = service.enqueue("reindex", {})
+    assert next(j for j in service.status()["jobs"] if j["id"] == library_job["id"])["filename"] is None
+
+
+def test_deleted_pending_source_no_longer_degrades_readiness(manager, service, make_pdf, monkeypatch):
+    kb = manager.registry.get("kb", "default")
+    monkeypatch.setattr(manager, "request", lambda *a, **kw: service.status())
+    service.ingest(make_pdf("source/indexed.pdf"))
+    removed = make_pdf("source/removed.pdf")
+    service.add_root(removed.parent)
+    service.scan()
+    service.db.execute("UPDATE jobs SET status='failed',error='Source must be an existing PDF file'")
+    profile = manager.registry.get("embedding", kb["embedding_id"])
+    profile.update(test_ok=True, tested_at=time.time())
+    manager.registry.put("embedding", profile)
+    assert manager.snapshot(kb)["availability"] == "degraded"
+    removed.unlink()
+
+    service.retry()
+    snapshot = manager.snapshot(kb)
+    assert snapshot["index_status"] == "complete"
+    assert snapshot["availability"] == "ready"
+    assert service.status()["jobs"][0]["status"] == "cancelled"
