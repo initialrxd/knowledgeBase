@@ -1,35 +1,37 @@
 import {useRef, useState, type FormEvent} from 'react';
 import {api} from './api';
 import {Field} from './ui';
+import {SearchTimings, type SearchTimingSample, type SearchTimingsMs} from './SearchTimings';
 import type {Embedding, KnowledgeBase, LibraryTuning, RetrievalTuning, Run} from './types';
 
-type SearchResult = {results: {id: string; title: string; text: string; citation: string}[]; warnings: string[]};
+type SearchResult = {results: {id: string; title: string; text: string; citation: string}[]; warnings: string[];
+  timings_ms?: Partial<SearchTimingsMs> | null};
 
 function SearchTest({kb, busy, tuning, validate}: {kb: KnowledgeBase; busy: boolean; tuning: RetrievalTuning; validate: () => boolean}) {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<SearchResult | null>(null);
-  const [samples, setSamples] = useState<number[]>([]);
+  const [samples, setSamples] = useState<SearchTimingSample[]>([]);
   const [repetitions, setRepetitions] = useState(5);
   const [completed, setCompleted] = useState(0);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [tested, setTested] = useState('');
   const draftKey = JSON.stringify([tuning.search_mode, tuning.search_limit, tuning.search_category, tuning.search_document_id, query, repetitions]);
-  const average = samples.length ? Math.round(samples.reduce((sum, sample) => sum + sample, 0) / samples.length) : null;
+  const average = samples.length ? (samples.reduce((sum, sample) => sum + sample.duration_ms, 0) / samples.length).toFixed(1) : null;
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (running || !validate()) return;
     setRunning(true); setError(''); setResult(null); setSamples([]); setCompleted(0); setTested(draftKey);
     const request = {query, mode: tuning.search_mode, limit: tuning.search_limit,
       category: tuning.search_category, document_id: tuning.search_document_id};
-    const durations: number[] = [];
+    const durations: SearchTimingSample[] = [];
     const warnings = new Set<string>();
     let found: SearchResult | null = null;
     try {
       for (let index = 0; index < repetitions; index++) {
         const started = performance.now();
         found = await api(`knowledge-bases/${kb.id}/search`, request) as SearchResult;
-        durations.push(performance.now() - started);
+        durations.push({duration_ms: performance.now() - started, timings_ms: found.timings_ms});
         found.warnings.forEach(warning => warnings.add(warning));
         setCompleted(index + 1);
       }
@@ -46,7 +48,7 @@ function SearchTest({kb, busy, tuning, validate}: {kb: KnowledgeBase; busy: bool
     {kb.runtime !== 'running' ? <p className="hint">先启动当前知识库，再测试检索。</p> : null}
     {error ? <p role="alert" className="form-error">{error}</p> : null}
     {result ? <div aria-live="polite">{tested !== draftKey ? <p className="hint" role="status">检索参数、问题或测试次数已修改，下方是上次测试结果，请重新测试。</p> : null}<p className="hint">返回 {result.results.length} 条 · 平均耗时 {average} ms（连续 {samples.length} 次成功检索）</p>
-      <details className="timing-samples"><summary>查看每次耗时</summary><p className="hint">{samples.map((duration, index) => `第 ${index + 1} 次：${Math.round(duration)} ms`).join('；')}</p></details>
+      <SearchTimings samples={samples}/>
       {result.warnings.map((warning, index) => <p className="form-error" key={index}>{warning}</p>)}
       {!result.results.length ? <p>没有找到匹配资料，可检查分类或文档范围。</p> : result.results.map(row => <article className="search-result" key={row.id}><strong>{row.title}</strong><p>{row.text}</p><small className="muted">{row.citation}</small></article>)}
     </div> : null}

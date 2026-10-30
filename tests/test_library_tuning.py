@@ -180,9 +180,12 @@ def test_preview_applies_unsaved_values_without_changing_defaults(manager, servi
     before = manager.registry.get("kb", "default")
     restarts = []
     monkeypatch.setattr(manager, "restart_worker", lambda *args: restarts.append(args))
+    worker_responses = []
     def request(identifier, method, path, **kwargs):
         assert path == "/v1/search"
-        return service.search(**kwargs["json"])
+        found = service.search(**kwargs["json"])
+        worker_responses.append(found)
+        return found
     monkeypatch.setattr(manager, "request", request)
     client = TestClient(management_app(manager, auto_start=False))
     response = client.post("/manager/api/knowledge-bases/default/search",
@@ -190,6 +193,8 @@ def test_preview_applies_unsaved_values_without_changing_defaults(manager, servi
         headers={"Authorization": "Bearer test-admin-token"})
     assert response.status_code == 200
     assert len(response.json()["results"]) == 2
+    assert response.json()["timings_ms"] == worker_responses[0]["timings_ms"]
+    assert response.json()["timings_ms"]["embedding_ms"] is None
     assert len(service.search("radar")["results"]) == 1
     assert manager.registry.get("kb", "default") == before
     assert service.s.search_limit == 1 and service.s.search_category == "technical"

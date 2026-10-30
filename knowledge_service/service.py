@@ -9,6 +9,7 @@ import struct
 import threading
 import time
 import uuid
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import portalocker
@@ -21,6 +22,25 @@ from .text import encoding, fts_query, sha256_text, split_pages, terms
 from .vectors import Vectors
 
 log = logging.getLogger(__name__)
+
+
+class _SearchTimings:
+    def __init__(self):
+        self.started = time.perf_counter()
+        self.stages = dict.fromkeys(("embedding_ms", "keyword_ms", "vector_ms", "results_ms"))
+
+    @contextmanager
+    def measure(self, stage):
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.stages[stage] = (self.stages[stage] or 0.0) + (time.perf_counter() - started) * 1000
+
+    def finish(self):
+        total = (time.perf_counter() - self.started) * 1000
+        measured = sum(value for value in self.stages.values() if value is not None)
+        return {"total_ms": total, **self.stages, "other_ms": max(0.0, total - measured)}
 
 
 def file_hash(path: Path) -> str:
@@ -365,6 +385,7 @@ class KnowledgeService:
         return {r["id"]: r for r in rows}
 
     def search(self, query: str, limit=None, category=None, document_id=None, mode=None):
+        timings = _SearchTimings()
         limit = self.s.search_limit if limit is None else limit
         mode = self.s.search_mode if mode is None else mode
         category = self.s.search_category if category is None else category
@@ -374,24 +395,25 @@ class KnowledgeService:
         if mode not in ("hybrid", "keyword", "vector"):
             raise ValueError("Unknown search mode")
         warnings, ranks = [], {}
-        fts = fts_query(query)
         candidate_limit = max(100, limit * 20)
-        if fts and mode != "vector":
-            sql = "SELECT f.chunk_id,bm25(chunks_fts) score FROM chunks_fts f JOIN chunks c ON c.id=f.chunk_id "
-            sql += "JOIN documents d ON d.id=c.document_id AND d.current_version=c.version_id AND d.deleted=0 "
-            sql += "JOIN categories cat ON cat.id=d.category_id WHERE chunks_fts MATCH ?"
-            args = [fts]
-            if category:
-                sql += " AND (cat.path=? OR cat.path LIKE ? ESCAPE '\\')"
-                escaped = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                args.extend([category, escaped + "/%"])
-            if document_id:
-                sql += " AND d.id=?"
-                args.append(document_id)
-            sql += " ORDER BY score LIMIT ?"
-            args.append(candidate_limit)
-            for rank, row in enumerate(self.db.rows(sql, args)):
-                ranks[row["chunk_id"]] = 1 / (60 + rank + 1)
+        with timings.measure("keyword_ms") if mode != "vector" else nullcontext():
+            fts = fts_query(query)
+            if fts and mode != "vector":
+                sql = "SELECT f.chunk_id,bm25(chunks_fts) score FROM chunks_fts f JOIN chunks c ON c.id=f.chunk_id "
+                sql += "JOIN documents d ON d.id=c.document_id AND d.current_version=c.version_id AND d.deleted=0 "
+                sql += "JOIN categories cat ON cat.id=d.category_id WHERE chunks_fts MATCH ?"
+                args = [fts]
+                if category:
+                    sql += " AND (cat.path=? OR cat.path LIKE ? ESCAPE '\\')"
+                    escaped = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    args.extend([category, escaped + "/%"])
+                if document_id:
+                    sql += " AND d.id=?"
+                    args.append(document_id)
+                sql += " ORDER BY score LIMIT ?"
+                args.append(candidate_limit)
+                for rank, row in enumerate(self.db.rows(sql, args)):
+                    ranks[row["chunk_id"]] = 1 / (60 + rank + 1)
         profile = self.db.get_meta("active_profile")
         if profile and mode != "keyword":
             provider, temporary = self.providers, False
@@ -406,18 +428,21 @@ class KnowledgeService:
                         "embedding_dimensions": spec["dimensions"], "embedding_revision": spec["revision"],
                         "demo_mode": spec.get("demo", False)})
                     provider, temporary = Providers(previous), True
-                vector = provider.embed([query])[0]
-                category_docs = None
-                if category and not document_id:
-                    escaped = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                    category_docs = [d["id"] for d in self.db.rows("SELECT d.id FROM documents d JOIN categories cat "
-                        "ON cat.id=d.category_id WHERE d.deleted=0 AND (cat.path=? OR cat.path LIKE ? ESCAPE '\\')",
-                        (category, escaped + "/%"))]
-                rows = self.vectors.search(profile, vector, candidate_limit, document_id, category_docs)
-                current = self._current_chunks([r["chunk_id"] for r in rows], category, document_id)
-                for rank, row in enumerate(rows):
-                    if row["chunk_id"] in current:
-                        ranks[row["chunk_id"]] = ranks.get(row["chunk_id"], 0) + 1 / (60 + rank + 1)
+                with timings.measure("embedding_ms"):
+                    vector = provider.embed([query])[0]
+                with timings.measure("vector_ms"):
+                    category_docs = None
+                    if category and not document_id:
+                        escaped = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                        category_docs = [d["id"] for d in self.db.rows("SELECT d.id FROM documents d JOIN categories cat "
+                            "ON cat.id=d.category_id WHERE d.deleted=0 AND (cat.path=? OR cat.path LIKE ? ESCAPE '\\')",
+                            (category, escaped + "/%"))]
+                    rows = self.vectors.search(profile, vector, candidate_limit, document_id, category_docs)
+                with timings.measure("results_ms"):
+                    current = self._current_chunks([r["chunk_id"] for r in rows], category, document_id)
+                    for rank, row in enumerate(rows):
+                        if row["chunk_id"] in current:
+                            ranks[row["chunk_id"]] = ranks.get(row["chunk_id"], 0) + 1 / (60 + rank + 1)
             except ProviderError as error:
                 if mode == "vector":
                     raise
@@ -427,20 +452,21 @@ class KnowledgeService:
                     provider.close()
         elif mode == "vector":
             warnings.append("No active vector index")
-        ordered = sorted(ranks, key=lambda key: (-ranks[key], key))
-        current = self._current_chunks(ordered, category, document_id)
-        results, seen = [], set()
-        for identifier in ordered:
-            row = current.get(identifier)
-            if not row or row["content_hash"] in seen:
-                continue
-            seen.add(row["content_hash"])
-            results.append({**row, "score": round(ranks[identifier], 6),
-                "citation": f"[{row['title']}，PDF 第 {row['page_start']}-{row['page_end']} 页；片段 {identifier}]"})
-            if len(results) >= limit:
-                break
+        with timings.measure("results_ms"):
+            ordered = sorted(ranks, key=lambda key: (-ranks[key], key))
+            current = self._current_chunks(ordered, category, document_id)
+            results, seen = [], set()
+            for identifier in ordered:
+                row = current.get(identifier)
+                if not row or row["content_hash"] in seen:
+                    continue
+                seen.add(row["content_hash"])
+                results.append({**row, "score": round(ranks[identifier], 6),
+                    "citation": f"[{row['title']}，PDF 第 {row['page_start']}-{row['page_end']} 页；片段 {identifier}]"})
+                if len(results) >= limit:
+                    break
         return {"query": query, "results": results, "warnings": warnings,
-            "embedding_profile": profile, "demo_mode": self.s.demo_mode}
+            "embedding_profile": profile, "demo_mode": self.s.demo_mode, "timings_ms": timings.finish()}
 
     def get_chunk(self, chunk_id):
         rows = self._current_chunks([chunk_id])
