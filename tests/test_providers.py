@@ -47,3 +47,30 @@ def test_embedding_batch_limit_is_adapted(settings):
         assert sizes == [4, 2, 2]
     finally:
         provider.close()
+
+
+def test_repeated_batch_shrinking_preserves_every_input_in_order(settings):
+    import json
+    from pydantic import SecretStr
+    limit = 4
+
+    def handler(request):
+        inputs = json.loads(request.content)["input"]
+        if len(inputs) > limit:
+            return httpx.Response(413, json={"error": "batch too large"})
+        return httpx.Response(200, json={"data": [
+            {"index": i, "embedding": [float(text), 1.]} for i, text in enumerate(inputs)]})
+
+    settings = settings.model_copy(update={"demo_mode": False, "embedding_base_url": "https://example.test/v1",
+        "embedding_api_key": SecretStr("private"), "embedding_model": "test", "embedding_batch_size": 8})
+    provider = Providers(settings, httpx.MockTransport(handler))
+    try:
+        inputs = [str(i) for i in range(8)]
+        expected = [[float(text), 1.] for text in inputs]
+        assert provider.embed(inputs) == expected
+        limit = 2
+        assert provider.embed(inputs) == expected
+        limit = 1
+        assert provider.embed(inputs) == expected
+    finally:
+        provider.close()

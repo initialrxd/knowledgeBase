@@ -44,20 +44,38 @@ class Vectors:
             self.changes[profile] = self.changes.get(profile, 0) + len(rows)
             self.operations[profile] = self.operations.get(profile, 0) + 1
 
-    def search(self, profile, vector, limit=100, document_id=None, document_ids=None):
+    def search(self, profile, vector, limit=100, document_id=None, document_ids=None, version_ids=None):
         with self.lock:
             table = self.table(profile)
             if table is None:
                 return []
             query = table.search(vector).distance_type("cosine").limit(limit)
+            filters = []
             if document_id:
-                query = query.where("document_id = '" + document_id.replace("'", "''") + "'", prefilter=True)
+                filters.append("document_id = '" + document_id.replace("'", "''") + "'")
             elif document_ids is not None:
                 if not document_ids:
                     return []
                 values = ",".join("'" + identifier.replace("'", "''") + "'" for identifier in document_ids)
-                query = query.where("document_id IN (" + values + ")", prefilter=True)
+                filters.append("document_id IN (" + values + ")")
+            if version_ids is not None:
+                if not version_ids:
+                    return []
+                values = ",".join("'" + identifier.replace("'", "''") + "'" for identifier in version_ids)
+                filters.append("version_id IN (" + values + ")")
+            if filters:
+                query = query.where(" AND ".join(filters), prefilter=True)
             return query.select(["chunk_id", "_distance"]).to_list()
+
+    def has_chunks(self, profile, version_id, chunk_ids):
+        """Check actual coverage, including tables pruned by older application versions."""
+        with self.lock:
+            table = self.table(profile)
+            if table is None:
+                return False
+            rows = (table.search().where("version_id = '" + version_id.replace("'", "''") + "'")
+                    .select(["chunk_id"]).limit(None).to_list())
+            return {row["chunk_id"] for row in rows} == set(chunk_ids)
 
     def prune_document(self, profile, document_id, keep_version=None):
         with self.lock:

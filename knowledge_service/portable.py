@@ -87,7 +87,7 @@ def export_bundle(service, destination, include_vectors=True):
             "processing": {"ocr_mode": service.s.ocr_mode, "chunk_tokens": service.s.chunk_tokens,
                 "chunk_overlap": service.s.chunk_overlap, "tokenizer": service.s.tokenizer,
                 "pdf_layout": service.s.pdf_layout, "ocr_image_regions": service.s.ocr_image_regions},
-            "source_schema": 1})
+            "source_schema": 2})
         with (stage / "checksums.jsonl").open("w", encoding="utf-8") as checksums:
             for path in stage.rglob("*"):
                 if path.is_file() and path.name != "checksums.jsonl":

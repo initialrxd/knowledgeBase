@@ -37,6 +37,7 @@ class Manager:
         if seed:
             self.registry.seed(settings)
             self.registry.sync_default_environment(self.project)
+        self.registry.refresh_model_settings(settings)
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="manager")
         self.status_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="manager-status")
         self.operations = {}
@@ -119,7 +120,8 @@ class Manager:
                             raise ValueError("内部端口属于另一个知识库")
                         profile = self.registry.get("embedding", kb["embedding_id"])
                         if (state["configured_profile"] == self.registry.worker_settings(kb).profile
-                                and kb.get("applied_embedding_version") == profile.get("version")):
+                                and kb.get("applied_embedding_version") == profile.get("version")
+                                and kb.get("applied_settings_version") == kb.get("settings_version")):
                             known = {Path(root["path"]).resolve() for root in state.get("roots", [])}
                             for path in kb.get("pending_source_dirs", []):
                                 if Path(path).resolve() not in known:
@@ -171,6 +173,7 @@ class Manager:
                         self.request(identifier, "GET", "/v1/categories", tools=True, timeout=1)
                         self.worker_states[identifier] = "running"
                         kb["applied_embedding_version"] = self.registry.get("embedding", kb["embedding_id"]).get("version")
+                        kb["applied_settings_version"] = kb.get("settings_version")
                         kb["pending_source_dirs"] = []
                         self.registry.put("kb", kb)
                         return {"running": True, "pid": process.pid}

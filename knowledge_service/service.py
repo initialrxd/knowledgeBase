@@ -225,9 +225,9 @@ class KnowledgeService:
             else:
                 document = None
             digest = file_hash(path)
+            version = self.db.one("SELECT * FROM versions WHERE id=?", (document["current_version"],)) if document else None
             if source and source["file_hash"] == digest and document and document["current_version"]:
-                version = self.db.one("SELECT * FROM versions WHERE id=?", (document["current_version"],))
-                if version["parser_profile"] == self.s.parser_profile:
+                if version["file_hash"] == digest and version["parser_profile"] == self.s.parser_profile:
                     self._source(path, root_id or source["root_id"], document["id"], digest, stat)
                     return {"status": "unchanged", "document_id": document["id"]}
             active = self.db.get_meta("active_profile")
@@ -235,11 +235,23 @@ class KnowledgeService:
                 raise ValueError("Embedding configuration changed. Run reindex before importing updates")
             duplicate = self.db.one("SELECT d.* FROM documents d JOIN versions v ON v.id=d.current_version "
                 "WHERE v.file_hash=? AND v.parser_profile=? AND d.deleted=0", (digest, self.s.parser_profile))
+            category_document = document
+            if version and version["file_hash"] != digest:
+                others = self.db.rows("SELECT path,root_id FROM sources WHERE document_id=? AND path!=?",
+                                      (document["id"], str(path)))
+                # Preserve other copies when their content diverges. A rename within
+                # an available directory still updates the original logical document.
+                if any(not self._ingest_source_missing(other) for other in others):
+                    document = None
             if duplicate and not document:
                 self._source(path, root_id or "single", duplicate["id"], digest, stat)
                 return {"status": "duplicate", "document_id": duplicate["id"]}
-            doc_id = document["id"] if document else (self.db.get_meta("pending_doc:" + digest) or uuid.uuid4().hex)
-            self.db.set_meta("pending_doc:" + digest, doc_id)
+            pending_key = "pending_doc:" + sha256_text(str(path) + ":" + digest)
+            pending = self.db.get_meta(pending_key) or self.db.get_meta("pending_doc:" + digest)
+            if pending and self.db.one("SELECT 1 FROM documents WHERE id=?", (pending,)):
+                pending = None
+            doc_id = document["id"] if document else (pending or uuid.uuid4().hex)
+            self.db.set_meta(pending_key, doc_id)
             version_id = sha256_text(doc_id + digest + self.s.parser_profile)[:32]
             original = self.s.root / "originals" / (digest + ".pdf")
             if not original.exists():
@@ -262,8 +274,8 @@ class KnowledgeService:
                     relative = path.parent.relative_to(Path(root["path"]))
                     if relative.parts and relative.parts[0].lower() not in self.s.unclassified_names:
                         folder = relative.as_posix()
-            if document and document["category_locked"]:
-                category_id, classification_warnings = document["category_id"], []
+            if category_document and category_document["category_locked"]:
+                category_id, classification_warnings = category_document["category_id"], []
             else:
                 category_id, classification_warnings = self.classify(extracted["title"], extracted["pages"], folder)
             warnings = extracted["warnings"] + classification_warnings
@@ -283,7 +295,7 @@ class KnowledgeService:
                     "title=excluded.title,filename=excluded.filename,category_id=excluded.category_id,"
                     "current_version=excluded.current_version,updated=excluded.updated",
                     (doc_id, extracted["title"], path.name, category_id, version_id,
-                     document["category_locked"] if document else 0, now, now))
+                     category_document["category_locked"] if category_document else 0, now, now))
                 # Scan FTS once per version, rather than once per chunk on long manuals.
                 con.execute("DELETE FROM chunks_fts WHERE chunk_id IN "
                     "(SELECT id FROM chunks WHERE version_id=?)", (version_id,))
@@ -301,7 +313,7 @@ class KnowledgeService:
                 for chunk in chunks:
                     stream.write(json.dumps(chunk, ensure_ascii=False) + "\n")
             self._library_copy(doc_id)
-            self.vectors.prune_document(self.s.profile, doc_id, version_id)
+            self._prune_vectors(self.s.profile, doc_id, version_id)
             self.vectors.optimize(self.s.profile, force=len(chunks) >= 1000)
             return {"status": "indexed", "document_id": doc_id, "version_id": version_id,
                 "pages": len(extracted["pages"]), "chunks": len(chunks), "warnings": warnings}
@@ -346,8 +358,19 @@ class KnowledgeService:
             self.db.execute("UPDATE documents SET deleted=1,updated=? WHERE id=?", (time.time(), doc_id))
             self._library_copy(doc_id)
             for row in self.db.rows("SELECT id FROM profiles"):
-                self.vectors.prune_document(row["id"], doc_id)
+                self._prune_vectors(row["id"], doc_id)
             return {"deleted": doc_id, "original_retained": True}
+
+    def _prune_vectors(self, profile, document_id, keep_version=None):
+        # Invalidate first: interruption may leave extra vectors, but never a false
+        # completion marker for vectors we removed. Reindex can reuse the cache.
+        sql = "DELETE FROM indexed_versions WHERE profile=? AND version_id IN (SELECT id FROM versions WHERE document_id=?"
+        args = [profile, document_id]
+        if keep_version:
+            sql += " AND id!=?"
+            args.append(keep_version)
+        self.db.execute(sql + ")", args)
+        self.vectors.prune_document(profile, document_id, keep_version)
 
     def reindex(self):
         """Build the configured embedding profile alongside the old profile; publish last."""
@@ -355,12 +378,15 @@ class KnowledgeService:
             count = 0
             for doc in self.db.rows("SELECT id,current_version FROM documents WHERE deleted=0 AND current_version IS NOT NULL"):
                 version = doc["current_version"]
-                if not self.db.one("SELECT 1 FROM indexed_versions WHERE profile=? AND version_id=?", (self.s.profile, version)):
+                chunk_ids = [row["id"] for row in self.db.rows("SELECT id FROM chunks WHERE version_id=?", (version,))]
+                indexed = self.db.one("SELECT 1 FROM indexed_versions WHERE profile=? AND version_id=?", (self.s.profile, version))
+                if not indexed or not self.vectors.has_chunks(self.s.profile, version, chunk_ids):
+                    self.db.execute("DELETE FROM indexed_versions WHERE profile=? AND version_id=?", (self.s.profile, version))
                     # Read one document at a time; the embedding cache resumes interrupted batches.
                     chunks = self.db.rows("SELECT * FROM chunks WHERE version_id=? ORDER BY page_start,id", (version,))
                     self._embed_chunks(chunks)
                     self.db.execute("INSERT OR IGNORE INTO indexed_versions VALUES(?,?)", (self.s.profile, version))
-                self.vectors.prune_document(self.s.profile, doc["id"], version)
+                self._prune_vectors(self.s.profile, doc["id"], version)
                 count += 1
             self.vectors.optimize(self.s.profile, force=True)
             self.db.set_meta("active_profile", self.s.profile)
@@ -431,13 +457,21 @@ class KnowledgeService:
                 with timings.measure("embedding_ms"):
                     vector = provider.embed([query])[0]
                 with timings.measure("vector_ms"):
-                    category_docs = None
-                    if category and not document_id:
+                    sql = ("SELECT d.id,d.current_version FROM documents d JOIN categories cat "
+                           "ON cat.id=d.category_id WHERE d.deleted=0 AND d.current_version IS NOT NULL")
+                    args = []
+                    if category:
                         escaped = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                        category_docs = [d["id"] for d in self.db.rows("SELECT d.id FROM documents d JOIN categories cat "
-                            "ON cat.id=d.category_id WHERE d.deleted=0 AND (cat.path=? OR cat.path LIKE ? ESCAPE '\\')",
-                            (category, escaped + "/%"))]
-                    rows = self.vectors.search(profile, vector, candidate_limit, document_id, category_docs)
+                        sql += " AND (cat.path=? OR cat.path LIKE ? ESCAPE '\\')"
+                        args.extend([category, escaped + "/%"])
+                    if document_id:
+                        sql += " AND d.id=?"
+                        args.append(document_id)
+                    published = self.db.rows(sql, args)
+                    # Filter before top-k: unpublished/obsolete batches must never
+                    # crowd out the last published version, even after a failed import.
+                    rows = self.vectors.search(profile, vector, candidate_limit, document_id,
+                                               version_ids=[doc["current_version"] for doc in published])
                 with timings.measure("results_ms"):
                     current = self._current_chunks([r["chunk_id"] for r in rows], category, document_id)
                     for rank, row in enumerate(rows):
@@ -635,12 +669,23 @@ class KnowledgeService:
     def enqueue(self, kind, payload):
         payload = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         now, identifier = time.time(), uuid.uuid4().hex
-        self.db.execute("INSERT OR IGNORE INTO jobs(id,kind,payload,created,updated) VALUES(?,?,?,?,?)",
-            (identifier, kind, payload, now, now))
-        row = self.db.one("SELECT id,status FROM jobs WHERE kind=? AND payload=?", (kind, payload))
-        if row["status"] == "cancelled":
-            self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE id=?", (time.time(), row["id"]))
-            row["status"] = "queued"
+        with self.db.connect() as con:
+            # Serialize lookup + insert, including simultaneous UI and scan requests.
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT id,status FROM jobs WHERE kind=? AND payload=? "
+                              "ORDER BY (status IN ('queued','running')) DESC,created DESC,rowid DESC LIMIT 1",
+                              (kind, payload)).fetchone()
+            if row and (row["status"] in ("queued", "running", "cancelled")
+                        or (kind == "ingest" and row["status"] == "failed")):
+                row = dict(row)
+                if row["status"] == "cancelled":
+                    con.execute("UPDATE jobs SET status='queued',error=NULL,result=NULL,updated=? WHERE id=?",
+                                (now, row["id"]))
+                    row["status"] = "queued"
+            else:
+                con.execute("INSERT INTO jobs(id,kind,payload,created,updated) VALUES(?,?,?,?,?)",
+                            (identifier, kind, payload, now, now))
+                row = {"id": identifier, "status": "queued"}
         self.wake.set()
         return row
 
@@ -865,11 +910,17 @@ class KnowledgeService:
             for job in self.db.rows("SELECT id,payload FROM jobs WHERE kind='ingest' AND status='failed'"):
                 if (not job_id or job["id"] == job_id) and self._ingest_source_missing(json.loads(job["payload"])):
                     self._cancel_missing_ingest(job["id"])
-            if job_id:
-                self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE id=? AND status='failed'",
-                    (time.time(), job_id))
-            else:
-                self.db.execute("UPDATE jobs SET status='queued',error=NULL,updated=? WHERE status='failed'", (time.time(),))
+            with self.db.connect() as con:
+                con.execute("BEGIN IMMEDIATE")
+                jobs = con.execute("SELECT id,kind,payload FROM jobs WHERE status='failed'" +
+                                   (" AND id=?" if job_id else "") + " ORDER BY created DESC,rowid DESC",
+                                   (job_id,) if job_id else ()).fetchall()
+                for job in jobs:
+                    if con.execute("SELECT 1 FROM jobs WHERE kind=? AND payload=? AND status IN ('queued','running')",
+                                   (job["kind"], job["payload"])).fetchone():
+                        continue
+                    con.execute("UPDATE jobs SET status='queued',error=NULL,result=NULL,updated=? WHERE id=?",
+                                (time.time(), job["id"]))
         self.wake.set()
         return {"retried": job_id or "all_failed"}
 

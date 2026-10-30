@@ -98,15 +98,18 @@ def test_failed_embedding_is_timed_in_hybrid_fallback(timed_search, monkeypatch)
 def test_vector_filter_and_both_result_reads_are_in_correct_phases(timed_search, monkeypatch):
     service, clock = timed_search
     original = service.db.rows
+    filter_calls = []
 
     def rows(sql, *args, **kwargs):
-        if sql.startswith("SELECT d.id FROM documents"):
+        if sql.startswith("SELECT d.") and "FROM documents d JOIN categories cat" in sql:
+            filter_calls.append(sql)
             clock.advance(0.007)
         return original(sql, *args, **kwargs)
 
     monkeypatch.setattr(service.db, "rows", rows)
     found = service.search("calibration", mode="hybrid", category="missing")
     assert found["results"] == []
+    assert len(filter_calls) == 1
     assert found["timings_ms"]["vector_ms"] == pytest.approx(10)
     assert found["timings_ms"]["results_ms"] == pytest.approx(8)
     assert_totals(found["timings_ms"])

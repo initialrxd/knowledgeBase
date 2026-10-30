@@ -105,3 +105,31 @@ async def test_managed_workers_and_real_mcp(tmp_path, settings, make_pdf):
             await asyncio.to_thread(manager.stop_worker, identifier)
         manager.pool.shutdown(wait=True)
         manager.status_pool.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_orphaned_worker_restarts_after_global_model_change(tmp_path, settings):
+    settings = settings.model_copy(update={"port": available_port(), "tools_port": available_port(),
+                                           "chat_model": "chat-old", "classify_model": "classifier-old"})
+    first = Manager(tmp_path / "console", settings, port=available_port())
+    second = None
+    try:
+        started = await asyncio.to_thread(first.start_worker, "default")
+        # Simulate a manager restart while its original worker is still alive.
+        updated = settings.model_copy(update={"chat_model": "chat-new", "classify_model": "classifier-new"})
+        second = Manager(tmp_path / "console", updated, port=first.port)
+        restarted = await asyncio.to_thread(second.start_worker, "default")
+        assert not restarted.get("reattached")
+        assert restarted["pid"] != started["pid"]
+        state = await asyncio.to_thread(second.request, "default", "GET", "/admin/status")
+        assert state["chat_model"] == "chat-new"
+        assert state["classification_model"] == "classifier-new"
+        # Once the new settings are applied, starting again safely reattaches.
+        assert (await asyncio.to_thread(second.start_worker, "default"))["reattached"]
+    finally:
+        for manager in (second, first):
+            if manager:
+                for identifier in list(manager.processes):
+                    await asyncio.to_thread(manager.stop_worker, identifier)
+                manager.pool.shutdown(wait=True)
+                manager.status_pool.shutdown(wait=True)

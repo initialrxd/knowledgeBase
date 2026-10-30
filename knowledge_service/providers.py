@@ -59,9 +59,11 @@ class Providers:
         raise ProviderError("API request exhausted retries")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        if len(texts) > self._embedding_batch_cap:
-            return [vector for start in range(0, len(texts), self._embedding_batch_cap)
-                    for vector in self.embed(texts[start:start + self._embedding_batch_cap])]
+        # Recursive requests can lower the cap again; keep this loop's boundaries stable.
+        batch_size = self._embedding_batch_cap
+        if len(texts) > batch_size:
+            return [vector for start in range(0, len(texts), batch_size)
+                    for vector in self.embed(texts[start:start + batch_size])]
         if self.settings.demo_mode:
             # Explicit test/demo mode only. These are NOT semantic embeddings.
             result = []

@@ -45,9 +45,7 @@ CREATE TABLE IF NOT EXISTS indexed_versions(
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0,
- error TEXT, result TEXT, created REAL NOT NULL, updated REAL NOT NULL,
- UNIQUE(kind,payload));
-PRAGMA user_version=1;
+ error TEXT, result TEXT, created REAL NOT NULL, updated REAL NOT NULL);
 """
 
 
@@ -56,9 +54,23 @@ class Database:
         self.path = path
         with self.connect() as con:
             con.execute("PRAGMA journal_mode=WAL")
-            if con.execute("PRAGMA user_version").fetchone()[0] > 1:
+            version = con.execute("PRAGMA user_version").fetchone()[0]
+            if version > 2:
                 raise RuntimeError("Database schema is newer than this application")
             con.executescript(SCHEMA)
+            # Version 1 deduplicated completed tasks forever. Rebuild only the queue,
+            # retaining IDs, progress, failures and history in one transaction.
+            with con:
+                con.execute("BEGIN IMMEDIATE")
+                if version == 1:
+                    con.execute("ALTER TABLE jobs RENAME TO jobs_v1")
+                    con.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,payload TEXT NOT NULL,"
+                                "status TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,"
+                                "error TEXT,result TEXT,created REAL NOT NULL,updated REAL NOT NULL)")
+                    con.execute("INSERT INTO jobs SELECT * FROM jobs_v1")
+                    con.execute("DROP TABLE jobs_v1")
+                con.execute("CREATE INDEX IF NOT EXISTS jobs_lookup ON jobs(kind,payload,created)")
+                con.execute("PRAGMA user_version=2")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

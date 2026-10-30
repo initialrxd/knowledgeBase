@@ -102,6 +102,23 @@ class Registry:
                       port=kb["admin_port"], tools_port=kb["tools_port"], host="127.0.0.1", public_base_url="")
         return Settings(_env_file=None, **values)
 
+    def refresh_model_settings(self, settings: Settings):
+        """Chat/classifier settings are global .env settings, not library overrides."""
+        current = settings_values(settings)
+        model_values = {key: value for key, value in current.items()
+                        if key.startswith(("chat_", "classify_")) or key == "max_context_tokens"}
+        with self.lock:
+            for kb in self.list("kb"):
+                key = "settings:" + kb["id"]
+                values = dict(self.secret(key))
+                if any(values.get(name) != value for name, value in model_values.items()):
+                    # An orphaned worker must restart before it can be reattached.
+                    # Invalidate first so an interrupted credential write cannot
+                    # leave an old worker marked as having applied the new settings.
+                    kb["settings_version"] = uuid.uuid4().hex
+                    self.put("kb", kb)
+                    self.secret(key, {**values, **model_values})
+
     def sync_default_environment(self, project: Path):
         """Keep standalone legacy serve compatible with the default library's UI settings."""
         env_file = project / ".env"
