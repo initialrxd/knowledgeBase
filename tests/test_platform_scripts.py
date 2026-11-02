@@ -56,8 +56,17 @@ def test_install_selects_native_dependencies(scripts, tmp_path, monkeypatch, pla
     assert sum("check" in c and "pip" in c for c in calls) == 2
 
 
-def test_install_stops_after_dependency_failure(scripts, monkeypatch):
+@pytest.mark.parametrize("platform,machine,with_webui", [
+    ("win32", "AMD64", True), ("darwin", "arm64", True), ("darwin", "x86_64", False)])
+def test_install_stops_after_dependency_failure(scripts, tmp_path, monkeypatch, platform, machine, with_webui):
     manage = scripts("manage")
+    monkeypatch.setattr(manage, "PROJECT", tmp_path)
+    monkeypatch.setattr(manage.sys, "platform", platform)
+    monkeypatch.setattr(manage.platform, "machine", lambda: machine)
+    python = tmp_path / ".venv" / "python"
+    python.parent.mkdir()
+    python.touch()
+    monkeypatch.setattr(manage, "venv_executable", lambda environment: environment / "python")
     calls = []
 
     def fail(*args):
@@ -66,8 +75,9 @@ def test_install_stops_after_dependency_failure(scripts, monkeypatch):
 
     monkeypatch.setattr(manage, "run", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        manage.install(SimpleNamespace(without_ocr=False, with_openwebui=True))
+        manage.install(SimpleNamespace(without_ocr=False, with_openwebui=with_webui))
     assert len(calls) == 1
+    assert calls[0][1:4] == ("-m", "pip", "install")
 
 
 def test_intel_mac_webui_fails_before_installing(scripts, monkeypatch):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -171,6 +172,10 @@ async def start_mcp(manager, identifier):
     instance = manager.registry.get("mcp", identifier)
     sock = socket.socket()
     try:
+        # POSIX listeners must reuse TIME_WAIT addresses after a graceful restart.
+        # Windows SO_REUSEADDR can instead steal a live listener's port.
+        if sys.platform != "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", instance["port"]))
         sock.listen(128)
         server = uvicorn.Server(uvicorn.Config(gateway_app(manager, instance), host="127.0.0.1",

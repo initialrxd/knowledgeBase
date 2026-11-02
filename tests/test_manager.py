@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from knowledge_service.manager_api import management_app
-from knowledge_service.manager_gateway import Gateway, gateway_app
+from knowledge_service.manager_gateway import Gateway, gateway_app, start_mcp, stop_mcp
 from knowledge_service.manager_runtime import Manager
 from knowledge_service.manager_store import Registry
 from knowledge_service.providers import ProviderError
@@ -175,6 +177,34 @@ def test_gateway_auth_port_conflicts_and_rotation(manager):
     state = app.get("/manager/api/state", headers=headers()).text
     assert "one-token" not in state
     assert "Authorization" not in state
+
+
+@pytest.mark.asyncio
+async def test_listener_restarts_after_active_connections_and_rejects_occupied_ports(manager):
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    instance = manager.save_mcp({"name": "restart", "port": port,
+        "knowledge_base_ids": ["default"], "auto_start": False})
+    try:
+        for _ in range(3):
+            await start_mcp(manager, instance["id"])
+            async with httpx.AsyncClient(trust_env=False) as client:
+                response = await client.get(f"http://127.0.0.1:{port}/openapi.json")
+                assert response.status_code == 200
+                # Stop while keep-alive connections are open so the server closes
+                # them first, leaving its port in TIME_WAIT on POSIX systems.
+                await stop_mcp(manager, instance["id"])
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            blocked = manager.save_mcp({"name": "occupied", "port": occupied.getsockname()[1],
+                "knowledge_base_ids": ["default"], "auto_start": False})
+            with pytest.raises(ValueError, match="端口"):
+                await start_mcp(manager, blocked["id"])
+            assert blocked["id"] not in manager.listeners
+    finally:
+        await stop_mcp(manager, instance["id"])
 
 
 def test_invalid_inputs_and_safe_unlink(manager):

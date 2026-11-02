@@ -1,19 +1,36 @@
 # Windows / macOS 兼容性
 
-检查日期：2026-10-29。代码适配与实际运行验收分别记录，尚未运行的 CI 不算通过证据。
+首次适配：2026-10-29；CI 失败排查：2026-11-02。代码适配、本机验证和原生 runner 结果分别记录。
 
 ## 支持目标与当前证据
 
 | 平台 | 管理台、PDF、检索、HTTP / MCP、迁移 | 可选 Open WebUI 0.12.3 | 本轮实际验证 |
 |---|---|---|---|
 | Windows x64，Python 3.11 | 已有支持，新增统一入口 | 保留独立环境及 Windows 快捷脚本 | 本机测试、依赖检查；详见下方 |
-| Windows x64，Python 3.12 | 包声明及 CI 目标 | Python 范围允许，待验收 | 未实机执行 |
-| macOS 14+，Apple Silicon，Python 3.11 / 3.12 | 已适配入口及原生依赖解析，待实机验收 | 已适配路径与进程退出，待原生安装及运行验收 | 平台分支测试；CI 待执行 |
-| macOS 14+，Intel，Python 3.11 / 3.12 | 配置独立 LanceDB / OCR 依赖版本，待实机验收 | 当前版本不支持原生安装 | 平台分支测试；CI 待执行 |
+| Windows x64，Python 3.12 | 原生 CI 覆盖安装、核心回归和构建 | Python 范围允许，聊天界面待独立验收 | 原生 CI 安装、回归及构建通过 |
+| macOS 14+，Apple Silicon，Python 3.11 / 3.12 | 原生 CI 覆盖安装、核心回归和构建 | 已适配路径与进程退出，待原生安装及运行验收 | 安装通过；MCP 重启失败修复及当前 CI 结果见下方 |
+| macOS 14+，Intel，Python 3.11 / 3.12 | 配置独立 LanceDB / OCR 依赖版本，由原生 CI 验证 | 当前版本不支持原生安装 | 安装通过；失败修复及当前 CI 结果见下方 |
 
 不将 Windows ARM64、32 位 Python、Rosetta 环境、旧版 macOS 或任意 Linux 发行版列入本轮验收范围。
 macOS 14+ 是当前部署目标，不表示已验证所有小版本的最低系统需求。
 Windows 本轮环境为 Windows x64 / CPython 3.11，不能据此宣称全部 Windows 版本均已测试。
+
+## 2026-11-02 Actions 失败排查
+
+[2026-10-30 的失败运行](https://github.com/initialrxd/knowledgeBase/actions/runs/41041141751) 中，
+Windows 的 Python 3.11 / 3.12 任务通过，macOS 任务在测试阶段失败，原生依赖安装已通过。
+日志确认两处原因：
+
+- Apple Silicon 和 Intel 在 MCP 令牌更换后重启监听器时，绑定原端口报 `Address already in use`。
+  POSIX 监听器现在在绑定前启用 `SO_REUSEADDR`，支持旧连接处于 TIME_WAIT 时正常重启；
+  Windows 保持原有绑定方式。新增真实连接下的连续重启及活动端口占用回归。
+- Intel 的安装失败测试请求了该平台不支持的 Open WebUI 安装组合，提前触发平台检查。
+  测试现在分别使用 Windows、Apple Silicon、Intel 的有效安装选项，并确认依赖安装失败后立即停止；
+  Intel Open WebUI 的明确拒绝检查继续单独保留。
+
+Windows 本机相关回归 33 项及 Ruff 检查通过。修复提交后，由同一个六组合矩阵验证，最新状态见
+[兼容性工作流](https://github.com/initialrxd/knowledgeBase/actions/workflows/compatibility.yml)。
+CI 覆盖核心服务和前端构建，不代表所有 macOS 小版本、真实云端 API 或聊天界面的浏览器验收。
 
 ## 本次排除的障碍
 
@@ -115,7 +132,8 @@ macOS 使用本机解析并可能选择范围内其他版本，安装时需保�
 Mac runner 选择依据 [GitHub 官方 runner 文档](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
 工作流新增显式 Python 架构选择和架构断言：macos-15 必须为 arm64，Windows / Intel 为 x64，
 避免在 Apple Silicon 验证中意外使用 Intel/Rosetta 解释器；工作流 YAML 与断言语法已在本机检查。
-本轮未提交或推送代码，未触发远程 CI；Open WebUI 的 macOS 原生安装和浏览器会话仍需独立验收。
+以上历史本机记录与远程 CI 结果分别保留；当前结果以兼容性工作流为准。
+Open WebUI 的 macOS 原生安装和浏览器会话仍需独立验收。
 
 本机验证命令：
 

@@ -324,6 +324,11 @@ OpenAPI 只公开 `search_knowledge`、`get_chunk`、`get_document`、`list_cate
 
 ## 测试与规模验证
 
+提交后，GitHub Actions 会在 Windows x64、macOS Apple Silicon 和 Intel 上分别检查 Python 3.11 / 3.12，
+覆盖安装、核心回归、Ruff、OCR 原生库导入与前端构建。
+最新结果见 [兼容性工作流](https://github.com/initialrxd/knowledgeBase/actions/workflows/compatibility.yml)；
+可选 Open WebUI 的原生安装和浏览器验收范围另见 [兼容性说明](docs/COMPATIBILITY.md)。
+
 ```powershell
 $env:TIKTOKEN_CACHE_DIR = Join-Path (Get-Location) 'data\cache\tiktoken'
 .\.venv\Scripts\python.exe -m pytest -q
