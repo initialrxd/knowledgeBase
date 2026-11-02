@@ -16,7 +16,7 @@
 
 ## 环境要求
 
-- Windows x64 + PowerShell，或 macOS（Apple Silicon / Intel）。
+- Windows x64 + CMD / PowerShell，或 macOS（Apple Silicon / Intel）。
 - Python 3.11 / 3.12，推荐 3.11；Windows PowerShell 安装脚本使用 `py -3.11`。
 - Git，用于克隆仓库；不需要 Docker 或 WSL。
 - 可访问的 OpenAI 兼容聊天与 embedding API，分别配置地址、模型和密钥。
@@ -28,6 +28,9 @@
 
 ## 快速启动
 
+Windows 可选择 CMD 的 `.cmd` 入口或 PowerShell 的 `.ps1` 入口，均调用同一套 Python 管理逻辑。
+CMD 参数使用 `--with-openwebui`、`--background` 等双横线形式；PowerShell 快捷脚本使用 `-WithOpenWebUI`、`-Background`。
+
 Windows：在 PowerShell 中克隆并安装：
 
 ```powershell
@@ -35,6 +38,17 @@ git clone https://github.com/initialrxd/knowledgeBase.git
 Set-Location knowledgeBase
 .\scripts\Install.ps1 -WithOpenWebUI
 ```
+
+Windows CMD（命令提示符）也可直接安装：
+
+```bat
+git clone https://github.com/initialrxd/knowledgeBase.git
+cd knowledgeBase
+scripts\Install.cmd --with-openwebui
+```
+
+CMD 安装入口优先使用已有 `.venv`，全新安装依次查找 `py -3.11`、`py -3.12` 和 PATH 中的
+Python 3.11 / 3.12；不需要激活虚拟环境。
 
 macOS：在终端中克隆并安装（先安装原生架构的 Python 3.11）：
 
@@ -73,6 +87,26 @@ API 地址是端点根路径；供应商要求时需包含 `/v1`，不要填写�
 .\scripts\Start-All.ps1
 ```
 
+Windows CMD 配置好 `.env` 后，在项目目录运行：
+
+```bat
+scripts\Start-All.cmd
+```
+
+CMD 常用命令（使用双横线参数）：
+
+| 操作 | 命令 |
+|---|---|
+| 只启动管理台并打开登录页面 | `scripts\Start-Manager.cmd --background` |
+| 后台启动且不打开浏览器 | `scripts\Start-All.cmd --no-browser` |
+| 单独后台启动 HTTP / MCP 服务 | `scripts\Start-Knowledge.cmd --background` |
+| 单独后台启动聊天界面 | `scripts\Start-OpenWebUI.cmd --background` |
+| 保存检查点并请求停止服务 | `scripts\Stop-All.cmd` |
+| 查看可用参数 | `scripts\Start-Manager.cmd --help` |
+
+脚本可通过完整路径从其他目录调用，路径含空格时加双引号。管理台使用自定义端口时，
+启动和停止均需附加 `--port 端口号`。在另一个 `.bat` / `.cmd` 文件中调用时使用 `call scripts\Start-All.cmd`。
+
 macOS 配置好 `.env` 后启动（同时适用于 Windows，将 `python3.11` 替换为 `py -3.11`）：
 
 ```bash
@@ -107,6 +141,15 @@ python3.11 scripts/manage.py stop-all
 # 确认服务已退出并完成备份后：
 git pull --ff-only
 .\scripts\Start-All.ps1
+```
+
+CMD 升级流程：
+
+```bat
+scripts\Stop-All.cmd
+rem 确认服务已退出并完成备份后：
+git pull --ff-only
+scripts\Start-All.cmd
 ```
 
 macOS 使用 `python3.11 scripts/manage.py stop-all` 和 `start-all`；仅安装管理台时，
@@ -307,6 +350,8 @@ knowledge_service/           Python 服务与命令行
   static/                   管理台生产静态文件
 frontend/                   React / TypeScript 管理台源码
 scripts/                    跨平台管理入口、Windows 快捷脚本和诊断工具
+  manage.py / platform_paths.py  Python 统一管理入口与平台路径
+  *.cmd / *.ps1             Windows CMD / PowerShell 快捷入口
 config/                     Open WebUI 模型预设
 tests/                      API、处理流水线与模型客户端测试
 docs/                       操作、Open WebUI 和远程接入说明

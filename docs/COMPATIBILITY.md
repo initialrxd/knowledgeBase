@@ -40,6 +40,15 @@ Windows 本轮环境为 Windows x64 / CPython 3.11，不能据此宣称全部 Wi
 
 ## 使用
 
+Windows CMD 可运行 `scripts\Install.cmd --with-openwebui`、`scripts\Start-All.cmd` 和
+`scripts\Stop-All.cmd`；仅管理台使用 `scripts\Start-Manager.cmd --background`。
+这些入口调用同一个 `scripts/manage.py`，支持 `--no-browser`、`--port` 等参数，无需激活虚拟环境。
+
+2026-11-02 在 Windows x64 / Python 3.11 上验证了六个 CMD 快捷入口的帮助命令、参数及失败码传递，
+并在包含中文、空格、括号和 `&` 的隔离路径中完成管理台后台启动、自定义端口、重复启动复用及认证停止。
+现有平台脚本测试 13 项通过。安装入口验证了 Python 选择与参数转发，未重新下载或安装依赖；
+此次未重新执行 Open WebUI 的完整启动验收。
+
 Windows 的 PowerShell 命令继续可用。统一入口在 Windows 使用 `py -3.11`，在 macOS 使用 `python3.11`：
 
 ```bash

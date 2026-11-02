@@ -1,6 +1,6 @@
 # 日常操作与迁移指南
 
-以下日常命令均在 PowerShell 中执行。本机已经安装并配置完成，不需要每天重新运行安装脚本。
+以下默认示例在 PowerShell 中执行，启动和停止另提供 CMD 示例。本机已经安装并配置完成，不需要每天重新运行安装脚本。
 
 ## 1. 启动
 
@@ -9,7 +9,15 @@ Set-Location -LiteralPath 'C:\Users\xdran\Documents\ChatGPT\Knowledge_Sharing_Sy
 .\scripts\Start-All.ps1
 ```
 
-后台启动知识库服务和 Open WebUI；启动后可关闭这个 PowerShell 窗口。电脑重启后需要重新启动，目前没有配置开机自启。
+使用 CMD（命令提示符）时：
+
+```bat
+cd /d "C:\Users\xdran\Documents\ChatGPT\Knowledge_Sharing_System 2"
+scripts\Start-All.cmd
+```
+
+后台启动管理台、受管知识库和 Open WebUI；启动后可关闭命令行窗口。电脑重启后需要重新启动，目前没有配置开机自启。
+只需管理台时，CMD 运行 `scripts\Start-Manager.cmd --background`；不自动打开浏览器时加 `--no-browser`。
 
 浏览器访问 http://127.0.0.1:8080，使用已有账户登录，在对话工具菜单启用“本地 PDF 知识库”。外部资料库不会自动出现在 Workspace > Knowledge；在 Open WebUI 上传文件也不会自动进入本项目的托管资料库。
 
@@ -19,6 +27,9 @@ Set-Location -LiteralPath 'C:\Users\xdran\Documents\ChatGPT\Knowledge_Sharing_Sy
 .\scripts\Start-Knowledge.ps1 -Background
 .\scripts\Start-OpenWebUI.ps1 -Background
 ```
+
+CMD 对应为 `scripts\Start-Knowledge.cmd --background` 和 `scripts\Start-OpenWebUI.cmd --background`。
+独立知识库服务与管理台不要同时管理同一个数据目录。
 
 查询状态和资料：
 
@@ -36,6 +47,8 @@ Set-Location -LiteralPath 'C:\Users\xdran\Documents\ChatGPT\Knowledge_Sharing_Sy
 ```powershell
 .\scripts\Stop-All.ps1
 ```
+
+CMD 使用 `scripts\Stop-All.cmd`。如启动时设置了管理台端口，停止时也需附加相同的 `--port 端口号`。
 
 只停止知识库，保留 Open WebUI 界面：
 

@@ -4,6 +4,9 @@
 默认地址为 http://127.0.0.1:8767。也可使用 `.env` 中的管理员令牌登录。
 `scripts\Start-All.ps1` 同时启动管理台和 Open WebUI，`scripts\Stop-All.ps1` 正常保存检查点后停止服务。
 
+CMD 使用 `scripts\Start-Manager.cmd --background`；全部启动和停止分别为
+`scripts\Start-All.cmd`、`scripts\Stop-All.cmd`。可添加 `--no-browser`，自定义端口使用 `--port 端口号`。
+
 ## 使用流程
 
 1. 在“Embedding 配置”新增或编辑 API 地址、模型及密钥，点击“测试”。模型须支持 OpenAI 兼容的 `/embeddings` 请求。

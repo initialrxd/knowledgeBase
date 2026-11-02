@@ -5,6 +5,7 @@
 ## 启动和首次登录
 
 在项目目录运行 `scripts\Start-All.ps1`，浏览器访问 http://127.0.0.1:8080。
+Windows CMD 使用 `scripts\Start-All.cmd`，停止使用 `scripts\Stop-All.cmd`。
 macOS Apple Silicon 使用 `python3.11 scripts/manage.py start-all`；当前版本的 Open WebUI
 固定依赖没有 Intel macOS 原生安装包，Intel 用户可独立使用管理台及 HTTP / MCP。
 平台范围和验收状态见 [兼容性说明](COMPATIBILITY.md)。
