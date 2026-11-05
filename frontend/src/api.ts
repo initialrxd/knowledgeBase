@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {ConsoleState} from './types';
 export class ApiError extends Error {constructor(message: string, public status: number) {super(message);}}
-export async function api(path: string, body?: unknown, method = 'POST') {
-  const response = await fetch('/manager/api/' + path, {method, credentials: 'same-origin',
+export async function api(path: string, body?: unknown, method = 'POST', signal?: AbortSignal) {
+  const response = await fetch('/manager/api/' + path, {method, signal, credentials: 'same-origin',
     headers: body === undefined ? undefined : {'Content-Type': 'application/json'},
     body: body === undefined ? undefined : JSON.stringify(body)});
   const result = await response.json();

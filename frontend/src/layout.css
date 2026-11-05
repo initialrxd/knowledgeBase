@@ -7,6 +7,15 @@
 .job-filename {max-width:400px; overflow-wrap:anywhere}
 .job-filename strong {font-weight:500}
 .job-table {min-width:650px}
+.log-controls {display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px 12px; margin-bottom:16px}
+.log-controls .field {margin:0; flex:1 1 210px; min-width:0}
+.log-controls .check-label {min-height:40px}
+.log-view {position:relative; margin:0; max-height:60vh; min-height:200px; overflow:auto; padding:12px 0;
+  background:#f8faff; font:13px/1.65 Consolas,"Cascadia Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere}
+.log-view span {display:block; padding:0 14px}
+.log-issue {background:#fff0ec; color:#9e3833}
+.log-match {background:#fff0be; color:#644600}
+.log-meta {margin:10px 0 22px; overflow-wrap:anywhere}
 @media (min-width:1181px) {
   .sidebar {width:clamp(224px,17.5vw,278px)}
   main {margin-left:clamp(224px,17.5vw,278px); padding:0 34px}

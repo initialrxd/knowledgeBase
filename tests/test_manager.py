@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from knowledge_service.manager_api import management_app
 from knowledge_service.manager_gateway import Gateway, gateway_app, start_mcp, stop_mcp
-from knowledge_service.manager_runtime import Manager
+from knowledge_service.manager_runtime import Manager, available_port
 from knowledge_service.manager_store import Registry
 from knowledge_service.providers import ProviderError
 
@@ -46,6 +47,32 @@ def test_session_origin_and_secret_redaction(manager):
     assert client.post("/manager/api/logout").status_code == 200
     assert client.get("/manager/api/state").status_code == 401
     assert client.get("/manager/api/state", headers=headers()).status_code == 200
+
+
+def test_runtime_logs_are_bounded_redacted_and_admin_only(manager):
+    log_dir = manager.registry.directory / "logs"
+    log_dir.mkdir()
+    profile = manager.registry.list("embedding")[0]
+    manager.registry.secret(profile["id"], "private/key-for-log-test")
+    (log_dir / "default.log").write_text("old line\n" * 20_000 +
+        "\x1b[31mERROR 向量化失败\x1b[0m\nTraceback (most recent call last):\n"
+        "RuntimeError: Authorization: Bearer test-read-token\n"
+        "https://example.test/?api_key=previous-credential\nprivate%2Fkey-for-log-test\n", encoding="utf-8")
+    client = TestClient(management_app(manager, auto_start=False))
+    path = "/manager/api/logs"
+    assert client.get(path).status_code == 401
+    assert client.get(path + "/worker-default").status_code == 401
+    assert client.get(path, headers={"Authorization": "Bearer test-read-token"}).status_code == 401
+    assert "worker-default" in {source["id"] for source in client.get(path, headers=headers()).json()}
+    assert client.get(path + "/secrets.json", headers=headers()).status_code == 404
+    assert client.get(path + "/manager.err", headers=headers()).json()["status"] == "missing"
+    response = client.get(path + "/worker-default", headers=headers())
+    assert response.headers["cache-control"] == "no-store"
+    tail = response.json()
+    assert tail["truncated"] and len(tail["lines"]) == 1000
+    assert tail["lines"][-5:-3] == ["ERROR 向量化失败", "Traceback (most recent call last):"]
+    for secret in ("test-read-token", "previous-credential", "private%2Fkey-for-log-test"):
+        assert secret not in response.text
 
 
 def test_registry_and_storage_isolation(manager, tmp_path):
@@ -207,15 +234,71 @@ async def test_listener_restarts_after_active_connections_and_rejects_occupied_p
         await stop_mcp(manager, instance["id"])
 
 
-def test_invalid_inputs_and_safe_unlink(manager):
+def test_invalid_inputs(manager):
     client = TestClient(management_app(manager, auto_start=False))
     assert client.post("/manager/api/mcp-instances", headers=headers(), json={"name": "x", "port": 80,
         "knowledge_base_ids": ["default"]}).status_code == 422
-    assert client.delete("/manager/api/knowledge-bases/default", headers=headers()).status_code == 400
     assert client.delete("/manager/api/mcp-instances/default", headers=headers()).status_code == 400
     profile = manager.registry.list("embedding")[0]
     assert client.delete("/manager/api/embedding-profiles/" + profile["id"], headers=headers()).status_code == 400
     assert "test-admin-token" not in json.dumps(manager.registry.list("kb"))
+
+
+def test_delete_default_and_last_knowledge_base_preserves_data_and_mcp(manager):
+    default = manager.registry.get("kb", "default")
+    default["admin_port"] = 0
+    manager.registry.put("kb", default)
+    data = Path(default["data_dir"])
+    data.mkdir(exist_ok=True)
+    retained = data / "index-data"
+    retained.write_text("preserve", encoding="utf-8")
+    second = manager.save_kb({"name": "second", "embedding_id": default["embedding_id"], "auto_start": False})
+    legacy = manager.registry.get("mcp", "default")
+    legacy["port"] = available_port()
+    manager.registry.put("mcp", legacy)
+    shared = manager.save_mcp({"name": "shared", "port": available_port(),
+        "knowledge_base_ids": [default["id"], second["id"]], "auto_start": True})
+    gateway = Gateway(manager, shared)
+
+    with TestClient(management_app(manager, auto_start=False)) as client:
+        def delete(identifier):
+            response = client.delete(f"/manager/api/knowledge-bases/{identifier}", headers=headers())
+            assert response.status_code == 200
+            operation = response.json()
+            deadline = time.monotonic() + 10
+            while operation["status"] in ("queued", "running") and time.monotonic() < deadline:
+                time.sleep(0.05)
+                operation = client.get(f"/manager/api/operations/{operation['id']}", headers=headers()).json()
+            assert operation["status"] == "done", operation
+            assert operation["result"] == {"removed": True, "data_preserved": True}
+
+        for instance in (legacy, shared):
+            path = f"/manager/api/mcp-instances/{instance['id']}/actions"
+            assert client.post(path, json={"action": "start"}, headers=headers()).status_code == 200
+        running_shared = manager.listeners[shared["id"]]
+        delete("default")
+        assert retained.read_text(encoding="utf-8") == "preserve"
+        assert legacy["id"] not in manager.listeners
+        assert manager.listeners[shared["id"]] is running_shared
+        assert gateway.selected(single=True) == [second["id"]]
+        with pytest.raises(HTTPException) as exception:
+            gateway.selected("default")
+        assert exception.value.status_code == 403
+        assert client.delete("/manager/api/knowledge-bases/default", headers=headers()).status_code == 404
+        assert client.post("/manager/api/mcp-instances/default/actions", json={"action": "start"},
+                           headers=headers()).status_code == 400
+
+        # A missing storage directory must not prevent removing a stale registration.
+        (Path(second["data_dir"]) / "service.lock").unlink(missing_ok=True)
+        Path(second["data_dir"]).rmdir()
+        delete(second["id"])
+        assert manager.listeners == {}
+
+    registry = Registry(manager.registry.directory)
+    registry.seed(manager.base)
+    assert registry.list("kb") == []
+    assert len(registry.list("embedding")) == 1
+    assert all(not instance["knowledge_base_ids"] for instance in registry.list("mcp"))
 
 
 def test_reenabled_directory_resumes_queued_imports(service, make_pdf):
@@ -272,13 +355,14 @@ def test_create_requires_both_locations_and_keeps_sources_when_stopped(manager, 
     snapshot = manager.snapshot(kb)
     assert snapshot["source_dirs"] == kb["source_dirs"]
     assert snapshot["vector_dir"].endswith("vectors")
-    response = client.delete("/manager/api/knowledge-bases/" + kb["id"], headers=headers())
-    operation = response.json()
-    deadline = time.monotonic() + 5
-    while operation["status"] in ("queued", "running") and time.monotonic() < deadline:
-        time.sleep(0.02)
-        operation = manager.operations[operation["id"]]
-    assert operation["status"] == "done", operation
+    with client:
+        response = client.delete("/manager/api/knowledge-bases/" + kb["id"], headers=headers())
+        operation = response.json()
+        deadline = time.monotonic() + 5
+        while operation["status"] in ("queued", "running") and time.monotonic() < deadline:
+            time.sleep(0.02)
+            operation = manager.operations[operation["id"]]
+        assert operation["status"] == "done", operation
     assert source.is_dir()
     assert (tmp_path / "向量 存储").is_dir()
 

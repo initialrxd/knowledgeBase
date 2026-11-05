@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import socket
@@ -20,8 +21,12 @@ import httpx
 import portalocker
 
 from .config import IngestionTuning, LibraryTuning, RetrievalTuning, Settings
+from .manager_logs import redact
 from .manager_store import Registry, settings_values
 from .providers import ProviderError, Providers
+
+
+log = logging.getLogger("uvicorn.error.manager")
 
 
 def available_port():
@@ -65,6 +70,8 @@ class Manager:
             except Exception as error:
                 row["error"] = str(error) if isinstance(error, (ValueError, KeyError, ProviderError)) else type(error).__name__
                 row["status"] = "failed"
+                log.error("Management operation %s (%s) failed: %s", identifier,
+                          getattr(function, "__name__", type(function).__name__), redact(self, row["error"]))
             row["updated"] = time.time()
         self.pool.submit(run)
         # Keep operation polling bounded without discarding operations still in progress.
@@ -190,6 +197,8 @@ class Manager:
             try:
                 with portalocker.Lock(str(Path(kb["data_dir"]) / "service.lock"), timeout=0):
                     return
+            except FileNotFoundError:
+                return
             except portalocker.exceptions.LockException:
                 time.sleep(0.3)
         raise ValueError("服务仍在保存当前批次，尚未释放目录；请等待后重试，未强制结束进程")
@@ -203,14 +212,23 @@ class Manager:
             except ProviderError:
                 pass
             self._wait_unlocked(kb)
-            process = self.processes.pop(identifier, None)
+            process = self.processes.get(identifier)
             if process:
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     raise ValueError("知识库进程仍在退出，请稍后重试") from None
+                self.processes.pop(identifier, None)
             self.worker_states[identifier] = "stopped"
             return {"stopped": True}
+
+    def detach_kb(self, identifier):
+        with self._worker_lock(identifier):
+            self.stop_worker(identifier)
+            with self._lock:
+                unbound = self.registry.detach_kb(identifier)
+                self.worker_states.pop(identifier, None)
+                return unbound
 
     def restart_worker(self, identifier):
         with self._worker_lock(identifier):
@@ -351,6 +369,7 @@ class Manager:
                                latency_ms=round((time.monotonic() - started) * 1000))
             except (ProviderError, ValueError) as error:
                 profile.update(test_ok=False, test_error=str(error))
+                log.warning("Embedding probe %s failed: %s", identifier, redact(self, str(error)))
             finally:
                 provider.close()
             profile["tested_at"] = time.time()
@@ -397,7 +416,7 @@ class Manager:
             return base
         try:
             state = self.request(kb["id"], "GET", "/admin/status", timeout=2)
-        except (ProviderError, ValueError):
+        except (ProviderError, ValueError, KeyError):
             if lifecycle == "running":
                 base.update(runtime="error", reason="无法连接知识库进程")
             return base
@@ -479,7 +498,7 @@ class Manager:
             runtime = self.listeners.get(instance["id"])
             running = bool(runtime and runtime[0].started and not runtime[1].done())
             states = [by_id[k]["availability"] for k in instance["knowledge_base_ids"] if k in by_id]
-            ready = running and len(states) == len(instance["knowledge_base_ids"]) and all(s == "ready" for s in states)
+            ready = running and bool(states) and len(states) == len(instance["knowledge_base_ids"]) and all(s == "ready" for s in states)
             result.append({**instance, "runtime": "running" if running else "stopped", "ready": ready,
                            "availability": "ready" if ready else "degraded" if running else "not_ready",
                            "error": self.listener_errors.get(instance["id"]), "token_set": True,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import secrets
 import time
@@ -19,6 +20,12 @@ from starlette.staticfiles import StaticFiles
 from .api import SearchRequest, _errors
 from .config import IngestionTuning, LibraryTuning, RetrievalTuning
 from .manager_gateway import start_mcp, stop_mcp, test_mcp
+from .manager_logs import redact
+from .manager_logs import sources as log_sources, tail as log_tail
+from .providers import ProviderError
+
+
+log = logging.getLogger("uvicorn.error.manager")
 
 
 class Named(BaseModel):
@@ -95,18 +102,21 @@ class McpAction(BaseModel):
     action: Literal["start", "stop", "restart", "test", "rotate_token"]
 
 
-async def supervise(manager):
+async def supervise(manager, mcp_changes):
     for kb in manager.registry.list("kb"):
         if kb["auto_start"]:
             try:
                 await asyncio.to_thread(manager.start_worker, kb["id"])
-            except Exception:
+            except Exception as error:
                 manager.worker_states[kb["id"]] = "error"
+                reason = str(error) if isinstance(error, (ValueError, ProviderError)) else type(error).__name__
+                log.error("Worker %s auto-start failed: %s", kb["id"], redact(manager, reason))
     for instance in manager.registry.list("mcp"):
-        if instance["auto_start"]:
+        if instance["auto_start"] and instance["knowledge_base_ids"]:
             try:
-                await start_mcp(manager, instance["id"])
-            except ValueError:
+                async with mcp_changes:
+                    await start_mcp(manager, instance["id"])
+            except (KeyError, ValueError):
                 pass
     while not manager.closing:
         active = {k["embedding_id"] for k in manager.registry.list("kb")
@@ -122,10 +132,11 @@ def management_app(manager, auto_start=True):
     manager.login_token = secrets.token_urlsafe(32)
     manager.sessions = {}
     manager.login_attempts = []
+    mcp_changes = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app):
-        task = asyncio.create_task(supervise(manager)) if auto_start else None
+        task = asyncio.create_task(supervise(manager, mcp_changes)) if auto_start else None
         try:
             yield
         finally:
@@ -220,6 +231,18 @@ def management_app(manager, auto_start=True):
             raise KeyError("Operation not found")
         return manager.operations[identifier]
 
+    @app.get("/manager/api/logs")
+    def logs():
+        return [{"id": identifier, "label": label, "path": path.as_posix()}
+                for identifier, label, path in log_sources(manager)]
+
+    @app.get("/manager/api/logs/{identifier}")
+    def read_log(identifier: str):
+        for source, _, path in log_sources(manager):
+            if source == identifier:
+                return log_tail(manager, path)
+        raise HTTPException(404, "未知的日志来源")
+
     @app.post("/manager/api/knowledge-bases")
     def create_kb(body: CreateKnowledgeBaseInput):
         return manager.submit(manager.save_kb, body.model_dump())
@@ -263,17 +286,21 @@ def management_app(manager, auto_start=True):
         return manager.submit(manager.root_action, identifier, args)
 
     @app.delete("/manager/api/knowledge-bases/{identifier}")
-    def detach_kb(identifier: str):
-        if identifier == "default":
-            raise ValueError("默认知识库不能移除")
-        if any(identifier in m["knowledge_base_ids"] for m in manager.registry.list("mcp")):
-            raise ValueError("请先解除 MCP 对此知识库的关联")
+    async def detach_kb(identifier: str):
+        manager.registry.get("kb", identifier)
+        loop = asyncio.get_running_loop()
 
-        def detach():
-            manager.stop_worker(identifier)
-            manager.registry.delete("kb", identifier)
-            return {"removed": True, "data_preserved": True}
-        return manager.submit(detach)
+        async def detach():
+            async with mcp_changes:
+                unbound = await asyncio.to_thread(manager.detach_kb, identifier)
+                for instance_id in unbound:
+                    await stop_mcp(manager, instance_id)
+                return {"removed": True, "data_preserved": True}
+
+        def delete_knowledge_base():
+            return asyncio.run_coroutine_threadsafe(detach(), loop).result()
+
+        return manager.submit(delete_knowledge_base)
 
     @app.post("/manager/api/embedding-profiles")
     def create_embedding(body: EmbeddingInput):
@@ -305,24 +332,26 @@ def management_app(manager, auto_start=True):
     @app.put("/manager/api/mcp-instances/{identifier}")
     async def update_mcp(identifier: str, body: McpInput):
         from .manager_gateway import update_mcp as apply_mcp
-        return await apply_mcp(manager, identifier, body.model_dump())
+        async with mcp_changes:
+            return await apply_mcp(manager, identifier, body.model_dump())
 
     @app.post("/manager/api/mcp-instances/{identifier}/actions")
     async def mcp_action(identifier: str, body: McpAction):
-        manager.registry.get("mcp", identifier)
-        if body.action == "stop":
-            return await stop_mcp(manager, identifier)
-        if body.action == "restart":
-            await stop_mcp(manager, identifier)
-        if body.action in ("start", "restart"):
-            return await start_mcp(manager, identifier)
         if body.action == "test":
             return await test_mcp(manager, identifier)
-        if identifier in manager.listeners:
-            raise ValueError("请先停止 MCP，再更换令牌")
-        token = secrets.token_urlsafe(32)
-        manager.registry.secret("mcp:" + identifier, token)
-        return {"rotated": True}
+        async with mcp_changes:
+            manager.registry.get("mcp", identifier)
+            if body.action == "stop":
+                return await stop_mcp(manager, identifier)
+            if body.action == "restart":
+                await stop_mcp(manager, identifier)
+            if body.action in ("start", "restart"):
+                return await start_mcp(manager, identifier)
+            if identifier in manager.listeners:
+                raise ValueError("请先停止 MCP，再更换令牌")
+            token = secrets.token_urlsafe(32)
+            manager.registry.secret("mcp:" + identifier, token)
+            return {"rotated": True}
 
     @app.post("/manager/api/mcp-instances/{identifier}/client-config")
     def client_config(identifier: str):
@@ -335,9 +364,10 @@ def management_app(manager, auto_start=True):
     async def delete_mcp(identifier: str):
         if identifier == "default":
             raise ValueError("默认 MCP 保留用于旧客户端兼容，可停止或编辑")
-        await stop_mcp(manager, identifier)
-        manager.registry.delete("mcp", identifier)
-        manager.registry.secret("mcp:" + identifier, "")
+        async with mcp_changes:
+            await stop_mcp(manager, identifier)
+            manager.registry.delete("mcp", identifier)
+            manager.registry.secret("mcp:" + identifier, "")
         return {"removed": True}
 
     @app.post("/manager/api/shutdown")
@@ -352,6 +382,7 @@ def management_app(manager, auto_start=True):
     @app.get("/")
     @app.get("/embedding")
     @app.get("/mcp")
+    @app.get("/logs")
     def index():
         if not (static / "index.html").exists():
             return JSONResponse({"detail": "请先在 frontend 目录执行 npm install 和 npm run build"}, 503)

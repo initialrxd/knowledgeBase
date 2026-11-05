@@ -63,6 +63,26 @@ class Registry:
         with self.lock, self.connection() as con:
             con.execute("DELETE FROM entities WHERE kind=? AND id=?", (kind, identifier))
 
+    def detach_kb(self, identifier):
+        """Remove the registration and its MCP bindings in one transaction."""
+        unbound = []
+        with self.lock, self.connection() as con:
+            deleted = con.execute("DELETE FROM entities WHERE kind='kb' AND id=?", (identifier,))
+            if not deleted.rowcount:
+                raise KeyError("Configuration not found")
+            con.execute("INSERT OR IGNORE INTO entities VALUES ('meta', 'seeded', '{}')")
+            for (value,) in con.execute("SELECT value FROM entities WHERE kind='mcp'").fetchall():
+                instance = json.loads(value)
+                bindings = instance["knowledge_base_ids"]
+                if identifier not in bindings:
+                    continue
+                instance["knowledge_base_ids"] = [kb for kb in bindings if kb != identifier]
+                con.execute("UPDATE entities SET value=? WHERE kind='mcp' AND id=?",
+                            (json.dumps(instance), instance["id"]))
+                if not instance["knowledge_base_ids"]:
+                    unbound.append(instance["id"])
+        return unbound
+
     def secret(self, key, value=None):
         with self.lock:
             if value is not None:
@@ -75,8 +95,9 @@ class Registry:
             return self.credentials.get(key, "")
 
     def seed(self, settings: Settings):
-        if self.list("kb"):
-            return
+        with self.connection() as con:
+            if con.execute("SELECT 1 FROM entities WHERE kind='kb' OR (kind='meta' AND id='seeded') LIMIT 1").fetchone():
+                return
         values = settings_values(settings)
         profile = {"id": uuid.uuid4().hex, "name": "默认 Embedding", "tested_at": None, "test_ok": None}
         for field in ("base_url", "endpoint", "model", "dimensions", "revision", "batch_size"):

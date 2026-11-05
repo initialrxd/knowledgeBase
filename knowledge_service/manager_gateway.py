@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -18,14 +19,16 @@ from .providers import ProviderError
 
 class Gateway:
     def __init__(self, manager, instance):
-        self.manager, self.instance = manager, instance
+        self.manager, self.identifier = manager, instance["id"]
 
     def selected(self, knowledge_base_id=None, single=False):
-        allowed = self.instance["knowledge_base_ids"]
+        allowed = self.manager.registry.get("mcp", self.identifier)["knowledge_base_ids"]
         if knowledge_base_id:
             if knowledge_base_id not in allowed:
                 raise HTTPException(403, "此 MCP 无权访问该知识库")
             return [knowledge_base_id]
+        if not allowed:
+            raise ValueError("请先关联至少一个知识库")
         if single and len(allowed) != 1:
             raise ValueError("多库 MCP 读取文档/片段时必须提供 knowledge_base_id")
         return allowed
@@ -164,12 +167,14 @@ def gateway_app(manager, instance):
 
 
 async def start_mcp(manager, identifier):
+    instance = manager.registry.get("mcp", identifier)
+    if not instance["knowledge_base_ids"]:
+        raise ValueError("请先关联至少一个知识库")
     if identifier in manager.listeners:
         server, task = manager.listeners[identifier]
         if not task.done():
             return {"running": server.started}
         manager.listeners.pop(identifier)
-    instance = manager.registry.get("mcp", identifier)
     sock = socket.socket()
     try:
         # POSIX listeners must reuse TIME_WAIT addresses after a graceful restart.
@@ -196,6 +201,7 @@ async def start_mcp(manager, identifier):
         sock.close()
         manager.listeners.pop(identifier, None)
         manager.listener_errors[identifier] = "MCP 端口占用或启动失败"
+        logging.getLogger("uvicorn.error.manager").error("MCP %s failed on port %s: %s", identifier, instance["port"], error)
         raise ValueError("MCP 端口占用或启动失败") from error
 
 
