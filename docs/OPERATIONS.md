@@ -6,30 +6,29 @@
 
 ```powershell
 Set-Location -LiteralPath 'C:\Users\xdran\Documents\ChatGPT\Knowledge_Sharing_System 2'
-.\scripts\Start-All.ps1
+.\scripts\Start-Manager.ps1 -Background
 ```
 
 使用 CMD（命令提示符）时：
 
 ```bat
 cd /d "C:\Users\xdran\Documents\ChatGPT\Knowledge_Sharing_System 2"
-scripts\Start-All.cmd
+scripts\Start-Manager.cmd --background
 ```
 
-后台启动管理台、受管知识库和 Open WebUI；启动后可关闭命令行窗口。电脑重启后需要重新启动，目前没有配置开机自启。
-只需管理台时，CMD 运行 `scripts\Start-Manager.cmd --background`；不自动打开浏览器时加 `--no-browser`。
-
-浏览器访问 http://127.0.0.1:8080，使用已有账户登录，在对话工具菜单启用“本地 PDF 知识库”。外部资料库不会自动出现在 Workspace > Knowledge；在 Open WebUI 上传文件也不会自动进入本项目的托管资料库。
+后台启动管理台、受管知识库和 MCP；启动后可关闭命令行窗口。电脑重启后需要重新启动，目前没有配置开机自启。
+不自动打开管理页面时加 `--no-browser`。
 
 也可单独启动：
 
 ```powershell
 .\scripts\Start-Knowledge.ps1 -Background
-.\scripts\Start-OpenWebUI.ps1 -Background
 ```
 
-CMD 对应为 `scripts\Start-Knowledge.cmd --background` 和 `scripts\Start-OpenWebUI.cmd --background`。
+CMD 对应为 `scripts\Start-Knowledge.cmd --background`。
 独立知识库服务与管理台不要同时管理同一个数据目录。
+
+Open WebUI 仅作可选验证客户端，按 [独立接入文档](OPENWEBUI.md) 另行安装、启动和停止。
 
 查询状态和资料：
 
@@ -42,18 +41,18 @@ CMD 对应为 `scripts\Start-Knowledge.cmd --background` 和 `scripts\Start-Open
 
 ## 2. 停止和重启
 
-停止两个服务：
+停止管理台、受管知识库和 MCP：
 
 ```powershell
-.\scripts\Stop-All.ps1
+.\scripts\Stop-Manager.ps1
 ```
 
-CMD 使用 `scripts\Stop-All.cmd`。如启动时设置了管理台端口，停止时也需附加相同的 `--port 端口号`。
+CMD 使用 `scripts\Stop-Manager.cmd`。如启动时设置了管理台端口，停止时也需附加相同的 `--port 端口号`。
 
-只停止知识库，保留 Open WebUI 界面：
+停止独立单库服务：
 
 ```powershell
-.\.venv\Scripts\python.exe -m knowledge_service.cli stop
+.\scripts\Stop-Knowledge.ps1
 ```
 
 知识库会保存提取/向量化检查点并退出，可能需要等待当前处理步骤结束。不要用关闭网页代替停止服务。重启时先停止、等待退出，再运行启动命令；服务重启不会删除已入库数据。
@@ -140,13 +139,12 @@ C:\Users\xdran\Desktop\Knowledge_DB
 
 ```powershell
 Set-Location -LiteralPath 'D:\Knowledge_Sharing_System'
-.\scripts\Install.ps1 -WithOpenWebUI
+.\scripts\Install.ps1
 # 安装后编辑本机 .env，填写云 API 配置。
 # 复用导出向量时，embedding 的地址、模型、维度和处理配置应与原库一致。
 .\scripts\Start-Knowledge.ps1 -Background
 .\.venv\Scripts\python.exe -m knowledge_service.cli import 'D:\KB_Backup\knowledge-backup-02' --wait
 .\.venv\Scripts\python.exe -m knowledge_service.cli status
-.\scripts\Start-OpenWebUI.ps1 -Background
 ```
 
 导入必须面向空知识库，不能覆盖现有文档；导入会校验文件完整性。带向量且 embedding 配置一致时，不需重新调用 embedding API。
@@ -159,7 +157,8 @@ Set-Location -LiteralPath 'D:\Knowledge_Sharing_System'
 
 资料内容相同会被去重，不应重复生成 embedding；旧电脑的来源绝对路径不会自动恢复。
 
-Open WebUI 账户和聊天记录需要另外迁移：停止两个服务后备份整个 `openwebui-data/`（包括隐藏的 `.webui_secret_key`），在新电脑首次启动 Open WebUI 前恢复。该目录可能包含已保存的 API 设置，应作为敏感备份保管。恢复后核对工具服务器地址及 Bearer Token；旧数据库设置可能覆盖新 `.env` 对应的初始设置。只迁移知识库时，在新电脑创建新账户即可。
+Open WebUI 不属于知识库迁移包。如仍需迁移这个验证客户端，应按其独立生命周期停止后，
+单独备份 `openwebui-data/`；只迁移知识库时无需安装或恢复 Open WebUI。
 
 ## 6. 更换底层模型
 

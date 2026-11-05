@@ -40,10 +40,9 @@ def test_install_selects_native_dependencies(scripts, tmp_path, monkeypatch, pla
     manage = scripts("manage")
     monkeypatch.setattr(manage, "PROJECT", tmp_path)
     monkeypatch.setattr(manage.sys, "platform", platform)
-    monkeypatch.setattr(manage.platform, "machine", lambda: "arm64" if platform == "darwin" else "AMD64")
     calls = []
     monkeypatch.setattr(manage, "run", lambda *args: calls.append([str(a) for a in args]))
-    manage.install(SimpleNamespace(without_ocr=without_ocr, with_openwebui=True))
+    manage.install(SimpleNamespace(without_ocr=without_ocr))
     dependencies = [c for c in calls if "pip" in c and "install" in c]
     if platform == "win32" and not without_ocr:
         assert "requirements.lock.txt" in dependencies[0]
@@ -52,17 +51,15 @@ def test_install_selects_native_dependencies(scripts, tmp_path, monkeypatch, pla
         assert "requirements.lock.txt" not in dependencies[0]
     if platform == "darwin":
         assert "config/constraints-macos.txt" in dependencies[0]
-        assert all("requirements-webui.lock.txt" not in c for c in dependencies)
-    assert sum("check" in c and "pip" in c for c in calls) == 2
+    assert all("requirements-webui.lock.txt" not in c for c in dependencies)
+    assert sum("check" in c and "pip" in c for c in calls) == 1
 
 
-@pytest.mark.parametrize("platform,machine,with_webui", [
-    ("win32", "AMD64", True), ("darwin", "arm64", True), ("darwin", "x86_64", False)])
-def test_install_stops_after_dependency_failure(scripts, tmp_path, monkeypatch, platform, machine, with_webui):
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_install_stops_after_dependency_failure(scripts, tmp_path, monkeypatch, platform):
     manage = scripts("manage")
     monkeypatch.setattr(manage, "PROJECT", tmp_path)
     monkeypatch.setattr(manage.sys, "platform", platform)
-    monkeypatch.setattr(manage.platform, "machine", lambda: machine)
     python = tmp_path / ".venv" / "python"
     python.parent.mkdir()
     python.touch()
@@ -75,18 +72,19 @@ def test_install_stops_after_dependency_failure(scripts, tmp_path, monkeypatch, 
 
     monkeypatch.setattr(manage, "run", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        manage.install(SimpleNamespace(without_ocr=False, with_openwebui=with_webui))
+        manage.install(SimpleNamespace(without_ocr=False))
     assert len(calls) == 1
     assert calls[0][1:4] == ("-m", "pip", "install")
 
 
-def test_intel_mac_webui_fails_before_installing(scripts, monkeypatch):
-    manage = scripts("manage")
-    monkeypatch.setattr(manage.sys, "platform", "darwin")
-    monkeypatch.setattr(manage.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(manage, "run", lambda *args: pytest.fail("Must explain unsupported dependency first"))
+def test_openwebui_install_is_separate_and_intel_mac_fails_early(scripts, tmp_path, monkeypatch):
+    webui = scripts("openwebui")
+    monkeypatch.setattr(webui, "PROJECT", tmp_path)
+    monkeypatch.setattr(webui.sys, "platform", "darwin")
+    monkeypatch.setattr(webui.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(webui, "run", lambda *args: pytest.fail("Must explain unsupported dependency first"))
     with pytest.raises(RuntimeError, match="no Intel macOS wheel"):
-        manage.install(SimpleNamespace(without_ocr=False, with_openwebui=True))
+        webui.install()
 
 
 def test_background_service_readiness(scripts, tmp_path, monkeypatch):
@@ -125,10 +123,10 @@ def test_background_service_readiness(scripts, tmp_path, monkeypatch):
             process.wait(timeout=10)
 
 
-def test_webui_does_not_accept_unrelated_health(scripts):
+def test_core_launcher_does_not_accept_unrelated_health(scripts):
     manage = scripts("manage")
-    assert not manage.ready("openwebui", {"service": "other"}, None)
-    assert manage.ready("openwebui", {"status": True}, None)
+    assert not manage.ready("manager", {"service": "other"}, "knowledge-manager")
+    assert manage.ready("manager", {"service": "knowledge-manager"}, "knowledge-manager")
 
 
 def test_foreground_manager_does_not_bootstrap_after_exit(scripts, tmp_path, monkeypatch):
@@ -144,10 +142,10 @@ def test_foreground_manager_does_not_bootstrap_after_exit(scripts, tmp_path, mon
 
 def test_macos_webui_exec_and_stop(scripts, tmp_path, monkeypatch):
     webui = scripts("run_openwebui")
-    manage = scripts("manage")
+    lifecycle = scripts("openwebui")
     monkeypatch.setattr(webui.sys, "platform", "darwin")
     monkeypatch.setattr(webui, "PROJECT", tmp_path)
-    monkeypatch.setattr(manage, "PROJECT", tmp_path)
+    monkeypatch.setattr(lifecycle, "PROJECT", tmp_path)
     executable = tmp_path / ".venv-webui" / "bin" / "open-webui"
     executable.parent.mkdir(parents=True)
     executable.touch()
@@ -166,27 +164,27 @@ def test_macos_webui_exec_and_stop(scripts, tmp_path, monkeypatch):
     monkeypatch.setattr(webui.os, "execve", execute, raising=False)
     with pytest.raises(Executed):
         webui.main()
-    pid_file = tmp_path / "logs" / "openwebui-child.pid"
+    pid_file = tmp_path / "openwebui-data" / "openwebui.pid"
     pid = int(pid_file.read_text())
     command = SimpleNamespace(returncode=0, stdout=f"python {executable} serve")
-    monkeypatch.setattr(manage.subprocess, "run", lambda *args, **kwargs: command)
+    monkeypatch.setattr(lifecycle.subprocess, "run", lambda *args, **kwargs: command)
     signals = []
-    monkeypatch.setattr(manage.os, "kill", lambda *args: signals.append(args))
-    manage.stop_webui()
+    monkeypatch.setattr(lifecycle.os, "kill", lambda *args: signals.append(args))
+    lifecycle.stop()
     assert signals == [(pid, signal.SIGTERM)]
     command.stdout = "another program"
     with pytest.raises(RuntimeError, match="refusing to stop"):
-        manage.stop_webui()
+        lifecycle.stop()
     assert len(signals) == 1
 
 
 def test_windows_webui_stop_validates_identity(scripts, tmp_path, monkeypatch):
-    manage = scripts("manage")
-    monkeypatch.setattr(manage.sys, "platform", "win32")
-    monkeypatch.setattr(manage, "PROJECT", tmp_path)
-    (tmp_path / "logs").mkdir()
-    (tmp_path / "logs" / "openwebui-child.pid").write_text("1234")
-    monkeypatch.setattr(manage.subprocess, "check_output", lambda *args, **kwargs: json.dumps("other.exe"))
-    monkeypatch.setattr(manage.os, "kill", lambda *args: pytest.fail("Unrelated process must survive"))
+    lifecycle = scripts("openwebui")
+    monkeypatch.setattr(lifecycle.sys, "platform", "win32")
+    monkeypatch.setattr(lifecycle, "PROJECT", tmp_path)
+    (tmp_path / "openwebui-data").mkdir()
+    (tmp_path / "openwebui-data" / "openwebui.pid").write_text("1234")
+    monkeypatch.setattr(lifecycle.subprocess, "check_output", lambda *args, **kwargs: json.dumps("other.exe"))
+    monkeypatch.setattr(lifecycle.os, "kill", lambda *args: pytest.fail("Unrelated process must survive"))
     with pytest.raises(RuntimeError, match="refusing to stop"):
-        manage.stop_webui()
+        lifecycle.stop()

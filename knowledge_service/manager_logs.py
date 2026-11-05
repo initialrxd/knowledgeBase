@@ -20,7 +20,7 @@ CREDENTIAL = re.compile(
 
 
 def sources(manager):
-    for service, name in (("manager", "管理台 / MCP"), ("knowledge", "独立知识库服务"), ("openwebui", "Open WebUI")):
+    for service, name in (("manager", "管理台 / MCP"), ("knowledge", "独立知识库服务")):
         for stream, label in (("err", "诊断输出"), ("out", "标准输出")):
             identifier = f"{service}.{stream}"
             yield identifier, f"{name} · {label}", Path("logs") / f"{identifier}.log"

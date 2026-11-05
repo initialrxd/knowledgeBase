@@ -125,7 +125,7 @@ def tools_app(service):
             yield
 
     app = FastAPI(title="Portable Knowledge Tools", version="0.1.0", lifespan=lifespan,
-        description="Read-only evidence tools for Open WebUI. All page numbers are PDF physical pages (1-based).")
+        description="Read-only evidence tools for API and MCP clients. PDF physical pages are 1-based.")
     app.state.mcp = mcp
     auth = HTTPBearer(auto_error=False)
 
@@ -153,7 +153,7 @@ def tools_app(service):
     def categories():
         return service.categories()
 
-    # /ask is available to applications, but not advertised as a model tool: Open WebUI answers itself.
+    # /ask is available to applications, but evidence-only clients should compose answers themselves.
     @app.post("/v1/ask", include_in_schema=False)
     def ask(body: AskRequest):
         return service.ask(body.question, body.category)

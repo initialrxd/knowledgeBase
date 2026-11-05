@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "portable-knowledge-service"
 version = "0.1.0"
-description = "Portable, incremental PDF knowledge service for Open WebUI and MCP"
+description = "Portable, incremental PDF knowledge service with HTTP and MCP interfaces"
 requires-python = ">=3.11,<3.13"
 classifiers = [
   "Operating System :: Microsoft :: Windows",

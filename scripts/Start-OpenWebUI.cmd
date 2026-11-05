@@ -1,3 +1,3 @@
 @echo off
-call "%~dp0Manage.cmd" start-openwebui %*
+call "%~dp0OpenWebUI.cmd" start %*
 exit /b %errorlevel%

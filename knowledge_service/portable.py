@@ -61,26 +61,26 @@ def export_bundle(service, destination, include_vectors=True):
                 folder.mkdir()
                 for index, batch in enumerate(service.vectors.batches(profile["id"])):
                     pq.write_table(__import__("pyarrow").Table.from_batches([batch]), folder / f"part-{index:06}.parquet")
-        for name in ("pyproject.toml", "requirements.lock.txt", "requirements-webui.lock.txt", ".env.example"):
+        for name in ("pyproject.toml", "requirements.lock.txt", ".env.example"):
             source = Path(__file__).resolve().parent.parent / name
             if source.exists():
                 shutil.copyfile(source, stage / name)
         project = Path(__file__).resolve().parent.parent
         application = stage / "application"
         application.mkdir()
+        application_ignore = shutil.ignore_patterns(
+            "__pycache__", "*.pyc", "*openwebui*", "*OpenWebUI*", "*OPENWEBUI*")
         for name in ("knowledge_service", "scripts", "docs", "config"):
             if (project / name).is_dir():
-                shutil.copytree(project / name, application / name,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in ("pyproject.toml", "requirements.lock.txt", "requirements-webui.lock.txt", ".env.example", "README.md", "HANDOFF.md", ".gitignore"):
+                shutil.copytree(project / name, application / name, ignore=application_ignore)
+        for name in ("pyproject.toml", "requirements.lock.txt", ".env.example", "README.md", "HANDOFF.md", ".gitignore"):
             if (project / name).is_file():
                 shutil.copyfile(project / name, application / name)
         (stage / "RESTORE.md").write_text(
             "# Restore\n\nThe application/ folder contains the source and Windows/macOS installer. "
             "Copy application/ to a writable folder, run Python 3.11/3.12 scripts/manage.py install, "
             "configure .env with your own credentials, "
-            "start the knowledge service, then run knowledge import <this bundle path> --wait. "
-            "Open WebUI users and chat history are backed up separately.\n", encoding="utf-8")
+            "start the knowledge service, then run knowledge import <this bundle path> --wait.\n", encoding="utf-8")
         json_file(stage / "manifest.json", {"format": "portable-knowledge", "version": 1,
             "created": time.time(), "active_profile": active if include_vectors else None,
             "includes_vectors": include_vectors, "source_roots_included": False,

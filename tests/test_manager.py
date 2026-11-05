@@ -63,7 +63,9 @@ def test_runtime_logs_are_bounded_redacted_and_admin_only(manager):
     assert client.get(path).status_code == 401
     assert client.get(path + "/worker-default").status_code == 401
     assert client.get(path, headers={"Authorization": "Bearer test-read-token"}).status_code == 401
-    assert "worker-default" in {source["id"] for source in client.get(path, headers=headers()).json()}
+    source_ids = {source["id"] for source in client.get(path, headers=headers()).json()}
+    assert "worker-default" in source_ids
+    assert not any("openwebui" in identifier for identifier in source_ids)
     assert client.get(path + "/secrets.json", headers=headers()).status_code == 404
     assert client.get(path + "/manager.err", headers=headers()).json()["status"] == "missing"
     response = client.get(path + "/worker-default", headers=headers())

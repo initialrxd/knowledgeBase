@@ -4,8 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
-import signal
 import subprocess
 import sys
 import time
@@ -27,9 +25,6 @@ def run(*args):
 def install(args):
     if not (3, 11) <= sys.version_info[:2] < (3, 13):
         raise RuntimeError("Python 3.11 or 3.12 is required.")
-    if args.with_openwebui and sys.platform == "darwin" and platform.machine() == "x86_64":
-        raise RuntimeError("Open WebUI 0.12.3 pins ONNX Runtime 1.26.0, which has no Intel macOS wheel. "
-                           "Install without --with-openwebui to use the console and HTTP/MCP service.")
     python = venv_executable(PROJECT / ".venv")
     if not python.exists():
         run(sys.executable, "-m", "venv", PROJECT / ".venv")
@@ -47,17 +42,7 @@ def install(args):
     run(python, "-m", "knowledge_service.cli", "init")
     run(python, "-c", "from knowledge_service.config import Settings; s=Settings(); s.prepare(); "
         "from knowledge_service.text import encoding; encoding(s.tokenizer); print('Tokenizer ready')")
-    if args.with_openwebui:
-        web_python = venv_executable(PROJECT / ".venv-webui")
-        if not web_python.exists():
-            run(sys.executable, "-m", "venv", PROJECT / ".venv-webui")
-        if sys.platform == "win32":
-            run(web_python, "-m", "pip", "install", "-r", "requirements-webui.lock.txt")
-        else:
-            constraints = ["-c", "config/constraints-macos.txt"] if sys.platform == "darwin" else []
-            run(web_python, "-m", "pip", "install", *constraints, "numpy>=2,<2.3", "open-webui==0.12.3")
-        run(web_python, "-m", "pip", "check")
-    print("Installed. Configure .env, then run scripts/manage.py start-all.")
+    print("Knowledge service installed. Configure .env, then run scripts/manage.py start-manager --background.")
 
 
 def request(port, path, *, token=None, post=False):
@@ -92,7 +77,7 @@ def launch(name, command, port, service, *, background):
         process = subprocess.Popen([str(a) for a in command], cwd=PROJECT, stdin=subprocess.DEVNULL,
                                    stdout=stdout, stderr=stderr, **options)
     (logs / f"{name}.pid").write_text(str(process.pid), encoding="utf-8")
-    deadline = time.monotonic() + (180 if name == "openwebui" else 45)
+    deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"{name} exited; see logs/{name}.err.log.")
@@ -107,7 +92,7 @@ def launch(name, command, port, service, *, background):
 
 
 def ready(name, state, service):
-    return state.get("status") is True if name == "openwebui" else state.get("service") == service
+    return state.get("service") == service
 
 
 def start_manager(args, python):
@@ -121,63 +106,38 @@ def start_manager(args, python):
         webbrowser.open(f"http://127.0.0.1:{args.port}/#login={login['token']}")
 
 
-def stop_webui():
-    pid_file = PROJECT / "logs" / "openwebui-child.pid"
-    if not pid_file.exists():
-        return
-    pid = int(pid_file.read_text("utf-8").strip())
-    if pid <= 0:
-        raise RuntimeError("Invalid Open WebUI PID.")
-    if sys.platform == "win32":
-        command = subprocess.check_output(["powershell", "-NoProfile", "-Command",
-            f"Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' | "
-            "Select-Object -ExpandProperty CommandLine | ConvertTo-Json"], text=True).strip()
-        command = json.loads(command) if command else ""
-    else:
-        result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
-        if result.returncode not in (0, 1):
-            raise RuntimeError("Cannot verify Open WebUI process identity.")
-        command = result.stdout.strip()
-    if not command:
-        pid_file.unlink(missing_ok=True)
-        return
-    expected = str(venv_executable(PROJECT / ".venv-webui", "open-webui"))
-    if expected not in command:
-        raise RuntimeError("PID no longer belongs to this Open WebUI; refusing to stop it.")
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    # Keep the PID record until the next start (or absence check), including while
-    # graceful shutdown is in progress. Never force-kill a database writer.
-    print("Open WebUI shutdown requested.")
-
-
-def stop_all(args, python):
+def stop_manager(args):
     state = health(args.port)
-    if state is not None:
-        if state.get("service") != "knowledge-manager":
-            raise RuntimeError(f"Port {args.port} belongs to another application.")
-        secrets = json.loads((PROJECT / "manager-data" / "secrets.json").read_text("utf-8"))
-        request(args.port, "/manager/api/shutdown", token=secrets["manager_admin"], post=True)
-        print("Manager is saving checkpoints and stopping managed services.")
-    else:
-        sys.path.insert(0, str(PROJECT))
-        from knowledge_service.config import Settings
-        settings = Settings()
-        if health(settings.port) is not None:
-            request(settings.port, "/admin/shutdown", token=settings.admin_token.get_secret_value(), post=True)
-            print("Knowledge service shutdown requested.")
-    stop_webui()
+    if state is None:
+        print("Knowledge manager is not running.")
+        return
+    if state.get("service") != "knowledge-manager":
+        raise RuntimeError(f"Port {args.port} belongs to another application.")
+    secrets = json.loads((PROJECT / "manager-data" / "secrets.json").read_text("utf-8"))
+    request(args.port, "/manager/api/shutdown", token=secrets["manager_admin"], post=True)
+    print("Manager is saving checkpoints and stopping managed knowledge and MCP services.")
+
+
+def stop_knowledge():
+    sys.path.insert(0, str(PROJECT))
+    from knowledge_service.config import Settings
+    settings = Settings()
+    state = health(settings.port)
+    if state is None:
+        print("Standalone knowledge service is not running.")
+        return
+    if state.get("service") != "knowledge-admin":
+        raise RuntimeError(f"Port {settings.port} belongs to another application.")
+    request(settings.port, "/admin/shutdown", token=settings.admin_token.get_secret_value(), post=True)
+    print("Standalone knowledge service shutdown requested.")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     setup = commands.add_parser("install")
-    setup.add_argument("--with-openwebui", action="store_true")
     setup.add_argument("--without-ocr", action="store_true")
-    for name in ("start-manager", "start-knowledge", "start-openwebui", "start-all", "stop-all"):
+    for name in ("start-manager", "start-knowledge", "stop-manager", "stop-knowledge"):
         command = commands.add_parser(name)
         command.add_argument("--port", type=int, default=8767, help="Manager port (default: 8767)")
         command.add_argument("--no-browser", action="store_true")
@@ -196,25 +156,19 @@ def main():
     if Path(sys.prefix).resolve() != (PROJECT / ".venv").resolve():
         run(python, "-X", "utf8", Path(__file__).resolve(), *sys.argv[1:])
         return
-    if args.command == "stop-all":
-        stop_all(args, python)
+    if args.command == "stop-manager":
+        stop_manager(args)
         return
-    if args.command == "start-all":
-        if not venv_executable(PROJECT / ".venv-webui", "open-webui").exists():
-            raise RuntimeError("Install with --with-openwebui first, or use start-manager alone.")
-        args.background = True
-    if args.command in ("start-manager", "start-all"):
+    if args.command == "stop-knowledge":
+        stop_knowledge()
+        return
+    if args.command == "start-manager":
         start_manager(args, python)
     if args.command == "start-knowledge":
         sys.path.insert(0, str(PROJECT))
         from knowledge_service.config import Settings
         launch("knowledge", [python, "-X", "utf8", "-m", "knowledge_service.cli", "serve"],
                Settings().port, "knowledge-admin", background=args.background)
-    if args.command in ("start-openwebui", "start-all"):
-        if not venv_executable(PROJECT / ".venv-webui", "open-webui").exists():
-            raise RuntimeError("Install with --with-openwebui first.")
-        launch("openwebui", [python, "-X", "utf8", PROJECT / "scripts" / "run_openwebui.py"],
-               8080, None, background=args.background)
 
 
 if __name__ == "__main__":

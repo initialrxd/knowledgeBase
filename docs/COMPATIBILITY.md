@@ -35,8 +35,8 @@ CI 覆盖核心服务和前端构建，不代表所有 macOS 小版本、真实�
 ## 本次排除的障碍
 
 - 旧脚本依赖 `py -3.11`、PowerShell、`Scripts/python.exe` 和 `open-webui.exe`。
-  新的 `scripts/manage.py` 用本机 Python 创建环境，区分 Windows `Scripts/` 与 macOS `bin/`，
-  提供 install、start-manager、start-knowledge、start-openwebui、start-all、stop-all。
+  核心 `scripts/manage.py` 现在只提供知识库的安装和生命周期；可选 Open WebUI 由
+  `scripts/openwebui.py` 独立安装、启动和停止。两者均区分 Windows `Scripts/` 与 macOS `bin/`。
 - Windows 安装入口调用同一安装逻辑，子命令失败立即停止；`--without-ocr` 不再被完整锁定文件忽略。
 - Windows 保留现有依赖快照；macOS 按 `pyproject.toml` 原生解析，使用
   `config/constraints-macos.txt`。这是一份兼容性约束，不是完整的 macOS 依赖锁。
@@ -57,9 +57,9 @@ CI 覆盖核心服务和前端构建，不代表所有 macOS 小版本、真实�
 
 ## 使用
 
-Windows CMD 可运行 `scripts\Install.cmd --with-openwebui`、`scripts\Start-All.cmd` 和
-`scripts\Stop-All.cmd`；仅管理台使用 `scripts\Start-Manager.cmd --background`。
-这些入口调用同一个 `scripts/manage.py`，支持 `--no-browser`、`--port` 等参数，无需激活虚拟环境。
+Windows CMD 的知识库入口为 `scripts\Install.cmd`、`scripts\Start-Manager.cmd --background` 和
+`scripts\Stop-Manager.cmd`。可选客户端使用 `Install-OpenWebUI.cmd`、`Start-OpenWebUI.cmd`、
+`Stop-OpenWebUI.cmd`，不会改变知识库进程状态。
 
 2026-11-02 在 Windows x64 / Python 3.11 上验证了六个 CMD 快捷入口的帮助命令、参数及失败码传递，
 并在包含中文、空格、括号和 `&` 的隔离路径中完成管理台后台启动、自定义端口、重复启动复用及认证停止。
@@ -70,17 +70,18 @@ Windows 的 PowerShell 命令继续可用。统一入口在 Windows 使用 `py -
 
 ```bash
 python3.11 scripts/manage.py install
-# Apple Silicon / Windows 可选择安装聊天界面：
-python3.11 scripts/manage.py install --with-openwebui
 # 编辑 .env 中的模型配置后：
 python3.11 scripts/manage.py start-manager --background
-# 安装了 Open WebUI 时，可改为 start-all。
-python3.11 scripts/manage.py stop-all
+python3.11 scripts/manage.py stop-manager
+# Apple Silicon / Windows 如需验证 Open WebUI，再单独执行：
+python3.11 scripts/openwebui.py install
+python3.11 scripts/openwebui.py start --background
+python3.11 scripts/openwebui.py stop
 ```
 
 `start-manager` 默认端口为 8767，`--port` 可更改；停止时须传入同一端口。
-无浏览器环境加 `--no-browser`。前台启动按 Ctrl+C 退出，后台启动使用 stop-all。
-stop-all 返回表示已请求正常退出，正在处理的知识库批次仍可能需要时间保存。
+无浏览器环境加 `--no-browser`。前台启动按 Ctrl+C 退出，后台启动使用 `stop-manager`。
+停止命令返回表示已请求正常退出，正在处理的知识库批次仍可能需要时间保存。
 仅使用原服务时运行 `start-knowledge --background`。不要与管理台同时启动同一知识库。
 
 首次安装需要网络下载依赖和 tokenizer；测试中的 demo 模式不代表生产环境可以离线调用云 API。

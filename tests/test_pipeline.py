@@ -179,6 +179,9 @@ def test_export_restore_without_api_calls(service, make_pdf, tmp_path):
     export_bundle(service, bundle)
     assert (bundle / "COMPLETE").exists()
     assert not (bundle / ".env").exists()
+    assert not (bundle / "requirements-webui.lock.txt").exists()
+    assert not (bundle / "application" / "scripts" / "openwebui.py").exists()
+    assert not (bundle / "application" / "docs" / "OPENWEBUI.md").exists()
     assert _filesystem_path(bundle / relative).read_text(encoding="utf-8") == "portable asset"
     restored = KnowledgeService(service.s.model_copy(update={"data_dir": tmp_path / "restored"}))
     try:

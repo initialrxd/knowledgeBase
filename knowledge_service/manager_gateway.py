@@ -153,7 +153,7 @@ def gateway_app(manager, instance):
         identifier = gateway.selected(single=True)[0]
         return manager.request(identifier, "POST", "/v1/ask", tools=True, json=body.model_dump(), timeout=180)
 
-    # Keep the Open WebUI tool schema limited to evidence tools, as in the legacy service.
+    # Keep the public tool schema limited to evidence retrieval tools.
     schema = app.openapi()
     schema["components"].setdefault("securitySchemes", {})["HTTPBearer"] = {"type": "http", "scheme": "bearer"}
     for path in schema["paths"].values():

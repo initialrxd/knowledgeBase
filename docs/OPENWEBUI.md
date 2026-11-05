@@ -1,24 +1,46 @@
 # Open WebUI 接入
 
-本项目通过外部 OpenAPI 工具服务器接入 Open WebUI，知识库文件和索引独立保存。
+Open WebUI 只是验证知识库接入方式之一，不是本项目的运行依赖，也不由知识库管理台管理。
+它通过公开的 OpenAPI 或 MCP 接口连接，使用独立环境、进程、数据目录和日志目录。
 
-## 启动和首次登录
+## 独立安装、启动和停止
 
-在项目目录运行 `scripts\Start-All.ps1`，浏览器访问 http://127.0.0.1:8080。
-Windows CMD 使用 `scripts\Start-All.cmd`，停止使用 `scripts\Stop-All.cmd`。
-macOS Apple Silicon 使用 `python3.11 scripts/manage.py start-all`；当前版本的 Open WebUI
-固定依赖没有 Intel macOS 原生安装包，Intel 用户可独立使用管理台及 HTTP / MCP。
-平台范围和验收状态见 [兼容性说明](COMPATIBILITY.md)。
-第一次使用时创建你自己的管理员账户。用户名、密码由你选择，项目不预置弱密码。
+先单独安装并启动知识库管理台：
+
+```powershell
+.\scripts\Install.ps1
+.\scripts\Start-Manager.ps1 -Background
+```
+
+然后按需安装和启动 Open WebUI：
+
+```powershell
+.\scripts\Install-OpenWebUI.ps1
+.\scripts\Start-OpenWebUI.ps1 -Background
+# 用完后单独停止；不会影响知识库或 MCP
+.\scripts\Stop-OpenWebUI.ps1
+```
+
+CMD 对应使用 `Install-OpenWebUI.cmd`、`Start-OpenWebUI.cmd --background`、
+`Stop-OpenWebUI.cmd`。macOS Apple Silicon 使用：
+
+```bash
+python3.11 scripts/openwebui.py install
+python3.11 scripts/openwebui.py start --background
+python3.11 scripts/openwebui.py stop
+```
+
+Open WebUI 当前固定依赖没有 Intel macOS 原生安装包，但这不影响知识库管理台、HTTP 或 MCP。
+启动后访问 http://127.0.0.1:8080，第一次使用时创建自己的管理员账户。
 
 启动脚本自动从被 Git 忽略的 `.env` 读取云模型设置，并预置本地知识库工具连接。
-默认回答模型为 `.env` 中的 `KB_CHAT_MODEL`，当前配置为 `deepseek-v4.1-flash`。
-Open WebUI 数据单独保存在 `openwebui-data/`，不要与知识库 `data/` 混用。
+默认回答模型为 `.env` 中的 `KB_CHAT_MODEL`。Open WebUI 数据保存在 `openwebui-data/`，
+日志保存在 `logs/openwebui/`；知识库管理台不会读取或控制它们。
 
-启动器默认使用标准运行模式（`KB_WEBUI_SLIM=false`），以支持原生知识库上传 PDF，
+启动器默认使用标准运行模式，以支持 Open WebUI 自己的原生知识库上传 PDF，
 并使用本机 Chroma 保存原生向量；embedding 和回答仍使用云 API。
 Slim 模式需要另配文档解析服务和 PostgreSQL/pgvector，不能直接上传 PDF 使用默认解析器。
-`KB_WEBUI_SLIM=true` 仅适用于这些外部服务已配置，或仅通过工具使用独立知识库的部署。
+需要时在启动 Open WebUI 的环境中设置 `OPENWEBUI_SLIM=true`。这不是知识库本体配置。
 
 原生知识库入口为 Workspace > Knowledge > 创建 > 添加内容 > 上传文件。
 文件处理完成后，在聊天中用 `#` 选择知识库。上传文件不会自动进入独立服务的 `data/`。

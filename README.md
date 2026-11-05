@@ -11,7 +11,7 @@
 - 本机管理台独立管理多个知识库、入库与检索参数，以及可关联多个库的 MCP 服务。
 - 在管理台查看服务运行日志，按关键词定位错误并查看前后记录。
 - 增量更新、内容去重、embedding 缓存和任务恢复；新版本完成后再替换旧版检索内容。
-- 通过 HTTP / OpenAPI / MCP 提供查询，使用 Open WebUI 聊天并展示来源页码。
+- 通过 HTTP / OpenAPI / MCP 提供查询，可由任意兼容客户端调用。
 - 使用未保存的检索参数连续测试，查看平均耗时、服务端阶段计时及每次明细。
 - 导出 PDF、正文、切片、元数据及向量，迁移后可继续使用或更换模型。
 
@@ -23,53 +23,48 @@
 - 可访问的 OpenAI 兼容聊天与 embedding API，分别配置地址、模型和密钥。
 - 首次安装需要联网下载 Python 依赖和 tokenizer 词表；OCR 按需加载本机识别模型。
 
-知识库服务与 Open WebUI 使用独立虚拟环境，避免依赖版本冲突。
+Open WebUI 不是知识库运行依赖；如需用它验证接入，可按独立文档另行安装。
 项目包声明支持 Python `>=3.11,<3.13`。Windows 已本机回归；macOS 入口与两种架构依赖已适配，
 实机验证范围及限制见 [平台兼容性与验证范围](docs/COMPATIBILITY.md)。本机 Windows 测试结果不能替代 macOS 验收。
 
 ## 快速启动
 
-Windows 可选择 CMD 的 `.cmd` 入口或 PowerShell 的 `.ps1` 入口，均调用同一套 Python 管理逻辑。
-CMD 参数使用 `--with-openwebui`、`--background` 等双横线形式；PowerShell 快捷脚本使用 `-WithOpenWebUI`、`-Background`。
+项目本体是知识库管理系统及 MCP/HTTP 服务。Open WebUI 是可选验证客户端，不参与本体安装、
+启动、停止、日志管理或迁移。
 
-Windows：在 PowerShell 中克隆并安装：
+Windows PowerShell：
 
 ```powershell
 git clone https://github.com/initialrxd/knowledgeBase.git
 Set-Location knowledgeBase
-.\scripts\Install.ps1 -WithOpenWebUI
+.\scripts\Install.ps1
+# 配置 .env 后启动管理台；它负责受管知识库与 MCP 服务
+.\scripts\Start-Manager.ps1 -Background
 ```
 
-Windows CMD（命令提示符）也可直接安装：
+Windows CMD：
 
 ```bat
 git clone https://github.com/initialrxd/knowledgeBase.git
 cd knowledgeBase
-scripts\Install.cmd --with-openwebui
+scripts\Install.cmd
+rem 配置 .env 后：
+scripts\Start-Manager.cmd --background
 ```
 
-CMD 安装入口优先使用已有 `.venv`，全新安装依次查找 `py -3.11`、`py -3.12` 和 PATH 中的
-Python 3.11 / 3.12；不需要激活虚拟环境。
-
-macOS：在终端中克隆并安装（先安装原生架构的 Python 3.11）：
+macOS：
 
 ```bash
 git clone https://github.com/initialrxd/knowledgeBase.git
 cd knowledgeBase
-python3.11 scripts/manage.py install --with-openwebui
+python3.11 scripts/manage.py install
+# 配置 .env 后：
+python3.11 scripts/manage.py start-manager --background
 ```
 
-上面的 Open WebUI 安装命令适用于 Apple Silicon。Intel Mac 使用
-`python3.11 scripts/manage.py install` 安装管理台及 HTTP / MCP 服务；当前 Open WebUI 版本
-固定的原生依赖未提供 Intel macOS 安装包，暂不支持在 Intel Mac 上原生安装此聊天界面。
-
-macOS 按本机平台解析依赖，不直接套用 Windows 的 `requirements*.lock.txt`。
-Intel Mac 对 LanceDB / ONNX Runtime 使用独立版本约束；Apple Silicon 请使用原生 arm64 Python。
-只需管理台和 HTTP / MCP 时省略 `--with-openwebui`；不需要 OCR 时添加 `--without-ocr`。
-该选项在全新环境中省略 OCR 依赖，不会卸载已有环境中的 OCR 包。
-
-安装脚本创建 `.venv` 和可选的 `.venv-webui`、安装对应平台依赖，并在 `.env` 不存在时根据
-[配置示例](.env.example) 创建配置，自动生成查询与管理令牌。已有 `.env` 不会被覆盖。
+CMD 安装入口会查找 Python 3.11 / 3.12；macOS 按本机平台解析依赖。安装脚本只创建知识库的
+`.venv`，并在 `.env` 不存在时根据 [配置示例](.env.example) 创建配置、自动生成查询与管理令牌。
+不需要 OCR 时为安装命令添加 `--without-ocr`（PowerShell 为 `-WithoutOCR`）。
 
 编辑本机 `.env`，至少填写以下配置，再启动服务：
 
@@ -82,79 +77,63 @@ Intel Mac 对 LanceDB / ONNX Runtime 使用独立版本约束；Apple Silicon �
 | `KB_DATA_DIR` | 本地知识库目录，默认 `./data` |
 
 API 地址是端点根路径；供应商要求时需包含 `/v1`，不要填写完整的 `/embeddings` 或
-`/chat/completions` 路径。回答模型需支持工具调用，才能在 Open WebUI 中调用知识库。
-
-```powershell
-.\scripts\Start-All.ps1
-```
-
-Windows CMD 配置好 `.env` 后，在项目目录运行：
-
-```bat
-scripts\Start-All.cmd
-```
+`/chat/completions` 路径。
 
 CMD 常用命令（使用双横线参数）：
 
 | 操作 | 命令 |
 |---|---|
-| 只启动管理台并打开登录页面 | `scripts\Start-Manager.cmd --background` |
-| 后台启动且不打开浏览器 | `scripts\Start-All.cmd --no-browser` |
-| 单独后台启动 HTTP / MCP 服务 | `scripts\Start-Knowledge.cmd --background` |
-| 单独后台启动聊天界面 | `scripts\Start-OpenWebUI.cmd --background` |
-| 保存检查点并请求停止服务 | `scripts\Stop-All.cmd` |
+| 启动管理台、受管知识库与 MCP | `scripts\Start-Manager.cmd --background` |
+| 后台启动且不打开管理页面 | `scripts\Start-Manager.cmd --background --no-browser` |
+| 停止管理台、受管知识库与 MCP | `scripts\Stop-Manager.cmd` |
+| 启动单库兼容服务（不用管理台时） | `scripts\Start-Knowledge.cmd --background` |
+| 停止单库兼容服务 | `scripts\Stop-Knowledge.cmd` |
 | 查看可用参数 | `scripts\Start-Manager.cmd --help` |
 
 脚本可通过完整路径从其他目录调用，路径含空格时加双引号。管理台使用自定义端口时，
-启动和停止均需附加 `--port 端口号`。在另一个 `.bat` / `.cmd` 文件中调用时使用 `call scripts\Start-All.cmd`。
+启动和停止均需附加 `--port 端口号`。
 
 macOS 配置好 `.env` 后启动（同时适用于 Windows，将 `python3.11` 替换为 `py -3.11`）：
 
 ```bash
-python3.11 scripts/manage.py start-all
-# 只启动管理台：
 python3.11 scripts/manage.py start-manager --background
-# 保存检查点并请求停止：
-python3.11 scripts/manage.py stop-all
+python3.11 scripts/manage.py stop-manager
 ```
 
 管理台启动后会打开一次性登录链接；无桌面环境时加 `--no-browser`。
-`start-all` 后台启动管理台及 Open WebUI；单独启动服务时加 `--background` 才会转入后台。
 `start-knowledge` 可单独启动原 HTTP / MCP 服务，不要同时启动管理台和独立知识库服务。
 
 - 知识库管理台：http://127.0.0.1:8767
-- 聊天界面：http://127.0.0.1:8080
-- Open WebUI 工具服务器：http://127.0.0.1:8766
 - OpenAPI 描述：http://127.0.0.1:8766/openapi.json
 - MCP Streamable HTTP：http://127.0.0.1:8766/mcp
 - 本地管理 API：http://127.0.0.1:8765/docs
 
-首次打开 Open WebUI 时创建自己的管理员账户，在工具菜单启用“本地 PDF 知识库”。
-详见 [Open WebUI 接入](docs/OPENWEBUI.md)。
+如需用 Open WebUI 验证工具调用，另行运行 `Install-OpenWebUI`、`Start-OpenWebUI` 和
+`Stop-OpenWebUI`；它的环境、进程、数据和日志均与本体分开。详见 [Open WebUI 接入](docs/OPENWEBUI.md)。
 
 ## 升级现有部署
 
-先正常停止服务，等待当前批次保存并退出，再备份各知识库存储目录、`.env`、
-`manager-data/` 和需要保留的 `openwebui-data/`。在 Windows 项目目录中更新：
+先正常停止服务，等待当前批次保存并退出，再备份各知识库存储目录、`.env` 和
+`manager-data/`。在 Windows 项目目录中更新：
 
 ```powershell
-.\scripts\Stop-All.ps1
+.\scripts\Stop-Manager.ps1
 # 确认服务已退出并完成备份后：
 git pull --ff-only
-.\scripts\Start-All.ps1
+.\scripts\Start-Manager.ps1 -Background
 ```
 
 CMD 升级流程：
 
 ```bat
-scripts\Stop-All.cmd
+scripts\Stop-Manager.cmd
 rem 确认服务已退出并完成备份后：
 git pull --ff-only
-scripts\Start-All.cmd
+scripts\Start-Manager.cmd --background
 ```
 
-macOS 使用 `python3.11 scripts/manage.py stop-all` 和 `start-all`；仅安装管理台时，
-使用 `start-manager --background` 启动。依赖有变化时，启动前重新执行对应平台的安装命令。
+macOS 使用 `python3.11 scripts/manage.py stop-manager` 和 `start-manager --background`。
+依赖有变化时，启动前重新执行对应平台的安装命令。Open WebUI 如有使用，应按其独立文档单独备份和升级。
 
 首次运行新版会自动将知识库元数据库从版本 1 升级到版本 2，保留任务 ID、状态、进度和历史。
 该升级调整任务去重规则，不需要重新导入现有资料。旧版程序不能直接打开版本 2 的元数据库；
@@ -175,7 +154,7 @@ macOS 使用 `python3.11 scripts/manage.py stop-all` 和 `start-all`；仅安装
 - **知识库**：独立存储与索引，选择 Embedding 配置，添加/停用/移除来源目录，查看完整队列统计、当前任务、可用状态，执行扫描、重试、暂停及重建。
 - **Embedding 配置**：可复用的 OpenAI 兼容 API 配置，支持连接测试。连接测试发送一条短文本；运行中的配置每五分钟自动检查一次。
 - **MCP 服务**：独立端口及令牌，可关联多个知识库；支持启停、真实 MCP 初始化测试、令牌更换及客户端配置复制。
-- **运行日志**：按来源查看管理台、MCP、各知识库和 Open WebUI 的日志，支持关键词定位、跳到最近的错误或警告，以及每 5 秒自动刷新。
+- **运行日志**：按来源查看管理台、MCP 和各知识库的日志，支持关键词定位、跳到最近的错误或警告，以及每 5 秒自动刷新。
 
 “运行中”不等于 Ready。模型连接异常、索引待重建或部分库不可用时会显示降级原因；跨库检索返回可用结果和警告。
 多库 MCP 返回 `knowledge_base_id`，读取片段或文档时须带上此字段；单库接入可继续使用原工具参数。
@@ -201,8 +180,8 @@ npm run build
 
 生产静态文件在 `knowledge_service/static/`，正常使用不需要运行 Node.js 开发服务器。
 
-需要停止管理台、受管知识库及 Open WebUI 时，运行 `.\scripts\Stop-All.ps1`；
-跨平台入口为 `python3.11 scripts/manage.py stop-all`。
+停止管理台、受管知识库及 MCP 时，运行 `.\scripts\Stop-Manager.ps1`；
+跨平台入口为 `python3.11 scripts/manage.py stop-manager`。Open WebUI 不会被该命令启动或停止。
 
 只使用 HTTP / MCP 时，可运行 `.\scripts\Install.ps1`，然后运行
 `.\scripts\Start-Knowledge.ps1 -Background`，无需安装 Open WebUI。

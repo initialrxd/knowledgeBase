@@ -19,7 +19,7 @@ def out(value):
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="本地 PDF 知识库：Open WebUI / MCP / HTTP")
+    parser = argparse.ArgumentParser(description="本地 PDF 知识库：MCP / HTTP / OpenAPI")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="创建被 Git 忽略的本机配置")
     commands.add_parser("serve", help="启动本机管理和查询服务")

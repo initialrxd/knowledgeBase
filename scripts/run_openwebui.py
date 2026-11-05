@@ -28,8 +28,8 @@ def environment(settings):
         "ENABLE_OLLAMA_API": "false", "ENABLE_OPENAI_API": "true",
         # Standard mode supports native PDF uploads and embedded vector storage.
         # Embeddings and chat still use the configured cloud APIs.
-        "USE_SLIM_DOCKER": str(settings.webui_slim).lower(),
-        "VECTOR_DB": env.get("VECTOR_DB", "pgvector" if settings.webui_slim else "chroma"),
+        "USE_SLIM_DOCKER": env.get("OPENWEBUI_SLIM", "false").lower(),
+        "VECTOR_DB": env.get("VECTOR_DB", "pgvector" if env.get("OPENWEBUI_SLIM", "false").lower() == "true" else "chroma"),
         "OPENAI_API_BASE_URL": settings.chat_base_url,
         "OPENAI_API_BASE_URLS": settings.chat_base_url,
         "OPENAI_API_KEY": settings.chat_api_key.get_secret_value(),
@@ -60,8 +60,8 @@ def main():
     settings.prepare()
     executable = venv_executable(PROJECT / ".venv-webui", "open-webui")
     if not executable.exists():
-        raise SystemExit("Open WebUI is not installed; run scripts/manage.py install --with-openwebui")
-    pid = PROJECT / "logs" / "openwebui-child.pid"
+        raise SystemExit("Open WebUI is not installed; run scripts/openwebui.py install")
+    pid = PROJECT / "openwebui-data" / "openwebui.pid"
     pid.parent.mkdir(exist_ok=True)
     if sys.platform != "win32":
         # Replace the wrapper so SIGTERM reaches the actual server on macOS.

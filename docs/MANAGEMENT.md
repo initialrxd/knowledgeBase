@@ -2,10 +2,11 @@
 
 在项目根目录运行 `scripts\Start-Manager.ps1 -Background`，浏览器将通过一次性登录链接打开管理台。
 默认地址为 http://127.0.0.1:8767。也可使用 `.env` 中的管理员令牌登录。
-`scripts\Start-All.ps1` 同时启动管理台和 Open WebUI，`scripts\Stop-All.ps1` 正常保存检查点后停止服务。
+使用 `scripts\Stop-Manager.ps1` 正常保存检查点并停止管理台、受管知识库和 MCP。
 
-CMD 使用 `scripts\Start-Manager.cmd --background`；全部启动和停止分别为
-`scripts\Start-All.cmd`、`scripts\Stop-All.cmd`。可添加 `--no-browser`，自定义端口使用 `--port 端口号`。
+CMD 使用 `scripts\Start-Manager.cmd --background` 和 `scripts\Stop-Manager.cmd`。
+可添加 `--no-browser`，自定义端口使用 `--port 端口号`。Open WebUI 属于可选外部客户端，
+有自己的安装、启动和停止命令，不由本管理台控制。
 
 ## 使用流程
 
